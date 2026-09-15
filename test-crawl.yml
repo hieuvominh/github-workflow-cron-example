@@ -1,0 +1,54 @@
+name: Test Bytekora crawler
+
+on:
+  workflow_dispatch:
+    inputs:
+      feed_url:
+        description: RSS or Atom feed to crawl
+        required: true
+        default: https://www.theverge.com/rss/index.xml
+
+permissions:
+  contents: read
+
+jobs:
+  test-crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download feed
+        shell: bash
+        env:
+          FEED_URL: ${{ inputs.feed_url }}
+        run: |
+          curl --location --fail --show-error --retry 3 \
+            --user-agent "BytekoraBot/0.1" \
+            --output feed.xml \
+            "$FEED_URL"
+
+      - name: Show first 10 articles
+        shell: python
+        run: |
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("feed.xml").getroot()
+          items = root.findall(".//item")
+
+          if items:
+              articles = [
+                  (item.findtext("title"), item.findtext("link"))
+                  for item in items[:10]
+              ]
+          else:
+              ns = {"atom": "http://www.w3.org/2005/Atom"}
+              articles = []
+              for entry in root.findall("atom:entry", ns)[:10]:
+                  link = entry.find("atom:link", ns)
+                  articles.append((entry.findtext("atom:title", namespaces=ns), link.get("href")))
+
+          if not articles:
+              raise SystemExit("No RSS/Atom articles found")
+
+          for number, (title, url) in enumerate(articles, 1):
+              print(f"{number:02}. {title}\n    {url}")
