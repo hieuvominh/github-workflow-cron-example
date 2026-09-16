@@ -9,8 +9,10 @@ on:
         default: https://www.theverge.com/rss/index.xml
 
   schedule:
-    # 08:15 and 20:15 in Vietnam/Thailand (UTC+7)
-    - cron: "15 1,13 * * *"
+    # Temporary test schedule: 20:30, 21:00, and 21:30 in Vietnam/Thailand (UTC+7)
+    - cron: "30 13 * * *"
+    - cron: "0 14 * * *"
+    - cron: "30 14 * * *"
 
 permissions:
   contents: read
@@ -34,18 +36,148 @@ jobs:
           FEED_URL: ${{ inputs.feed_url || 'https://www.theverge.com/rss/index.xml' }}
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
           INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
+          MEDIA_REPO: ${{ vars.MEDIA_REPO }}
+          MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
+          MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
         run: |
+          import base64
+          import hashlib
           import json
           import os
           import re
           import time
           import xml.etree.ElementTree as ET
+          import urllib.error
+          import urllib.parse
           import urllib.request
           import trafilatura
 
           FEED_URL = os.environ["FEED_URL"]
           BYTEKORA_URL = os.environ["BYTEKORA_URL"]
           INGEST_SECRET = os.environ["INGEST_SECRET"]
+          MEDIA_REPO = os.environ["MEDIA_REPO"]
+          MEDIA_BRANCH = os.environ["MEDIA_BRANCH"]
+          MEDIA_TOKEN = os.environ["MEDIA_TOKEN"]
+
+          if not MEDIA_REPO or "/" not in MEDIA_REPO or not MEDIA_TOKEN:
+              raise SystemExit("MEDIA_REPO or MEDIA_TOKEN is missing")
+
+          def tag_name(element):
+              return element.tag.rsplit("}", 1)[-1]
+
+          def element_text(element):
+              return re.sub(r"\s+", " ", "".join(element.itertext())).strip()
+
+          def upload_image(source_url, article_url):
+              absolute_url = urllib.parse.urljoin(article_url, source_url)
+              request = urllib.request.Request(
+                  absolute_url,
+                  headers={"User-Agent": "BytekoraBot/0.1"},
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  content_type = response.headers.get_content_type().lower()
+                  image_data = response.read(15_000_001)
+
+              extensions = {
+                  "image/jpeg": "jpg",
+                  "image/png": "png",
+                  "image/webp": "webp",
+                  "image/gif": "gif",
+              }
+              extension = extensions.get(content_type)
+              if not extension or len(image_data) > 15_000_000:
+                  return None
+
+              digest = hashlib.sha256(image_data).hexdigest()
+              media_path = f"articles/{digest[:2]}/{digest}.{extension}"
+              encoded_path = urllib.parse.quote(media_path, safe="/")
+              api_url = f"https://api.github.com/repos/{MEDIA_REPO}/contents/{encoded_path}"
+              api_headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {MEDIA_TOKEN}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "BytekoraBot/0.1",
+              }
+
+              exists_request = urllib.request.Request(
+                  f"{api_url}?ref={urllib.parse.quote(MEDIA_BRANCH)}",
+                  headers=api_headers,
+              )
+              try:
+                  with urllib.request.urlopen(exists_request, timeout=30):
+                      pass
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  upload_request = urllib.request.Request(
+                      api_url,
+                      data=json.dumps({
+                          "message": f"Add crawled image {digest[:12]}",
+                          "content": base64.b64encode(image_data).decode(),
+                          "branch": MEDIA_BRANCH,
+                      }).encode(),
+                      headers={**api_headers, "Content-Type": "application/json"},
+                      method="PUT",
+                  )
+                  with urllib.request.urlopen(upload_request, timeout=60):
+                      pass
+
+              branch = urllib.parse.quote(MEDIA_BRANCH, safe="")
+              return f"https://raw.githubusercontent.com/{MEDIA_REPO}/{branch}/{encoded_path}"
+
+          def extract_blocks(downloaded, article_url):
+              extracted_xml = trafilatura.extract(
+                  downloaded,
+                  url=article_url,
+                  include_comments=False,
+                  include_tables=False,
+                  include_images=True,
+                  include_formatting=True,
+                  favor_precision=True,
+                  output_format="xml",
+              )
+              if not extracted_xml:
+                  return []
+
+              document = ET.fromstring(extracted_xml)
+              main = next((node for node in document.iter() if tag_name(node) == "main"), document)
+              blocks = []
+
+              def walk(node):
+                  kind = tag_name(node)
+                  if kind == "head":
+                      text = element_text(node)
+                      if text:
+                          level = node.get("rend", "h2")
+                          blocks.append({
+                              "type": "heading",
+                              "level": level if level in ("h2", "h3") else "h2",
+                              "text": text[:500],
+                          })
+                      return
+                  if kind in ("p", "quote", "item"):
+                      text = element_text(node)
+                      if text:
+                          prefix = "• " if kind == "item" else ""
+                          blocks.append({"type": "paragraph", "text": (prefix + text)[:10_000]})
+                      for image in (child for child in node.iter() if tag_name(child) == "graphic"):
+                          walk(image)
+                      return
+                  if kind == "graphic":
+                      source = node.get("src")
+                      if source:
+                          blocks.append({
+                              "type": "pending_image",
+                              "source": source,
+                              "alt": (node.get("alt") or node.get("title") or "")[:500],
+                              "caption": (node.get("title") or "")[:1_000],
+                          })
+                      return
+                  for child in node:
+                      walk(child)
+
+              walk(main)
+              return blocks
 
           feed_request = urllib.request.Request(
               FEED_URL,
@@ -86,27 +218,48 @@ jobs:
 
           for number, (title, url) in enumerate(articles, 1):
               downloaded = trafilatura.fetch_url(url)
-              extracted = trafilatura.extract(
-                  downloaded,
-                  include_comments=False,
-                  include_tables=False,
-                  favor_precision=True,
-                  output_format="txt",
-              ) if downloaded else None
+              blocks = extract_blocks(downloaded, url) if downloaded else []
+              text_blocks = [block["text"] for block in blocks if block["type"] in ("paragraph", "heading")]
+              clean_text = "\n\n".join(text_blocks)
 
-              if not extracted or len(extracted) < 200:
+              if len(clean_text) < 200:
                   print(f"{number:02}. Skipped: could not extract enough content from {url}")
                   continue
 
-              clean_text = re.sub(r"\n{3,}", "\n\n", extracted).strip()
+              uploaded_blocks = []
+              image_count = 0
+              for block in blocks:
+                  if block["type"] != "pending_image":
+                      uploaded_blocks.append(block)
+                      continue
+                  if image_count >= 20:
+                      continue
+                  try:
+                      hosted_url = upload_image(block["source"], url)
+                  except Exception as error:
+                      print(f"    Image skipped: {error}")
+                      continue
+                  if hosted_url:
+                      uploaded_blocks.append({
+                          "type": "image",
+                          "url": hosted_url,
+                          "alt": block["alt"],
+                          "caption": block["caption"],
+                          "sourceUrl": urllib.parse.urljoin(url, block["source"]),
+                      })
+                      image_count += 1
+
               excerpt = re.sub(r"\s+", " ", clean_text)[:300].strip()
-              body = clean_text[:18_000].rstrip() + f"\n\nOriginal source: {url}"
+              uploaded_blocks.append({
+                  "type": "paragraph",
+                  "text": f"Original source: {url}",
+              })
 
               article = {
                   "externalSourceID": url,
                   "title": title[:180],
                   "excerpt": excerpt,
-                  "body": body,
+                  "blocks": uploaded_blocks[:500],
                   "categorySlug": "news",
                   "publish": True,
               }
@@ -130,7 +283,7 @@ jobs:
               print(
                   f"{number:02}. {title}\n"
                   f"    {url}\n"
-                  f"    Extracted: {len(clean_text)} characters\n"
+                  f"    Extracted: {len(clean_text)} characters, {image_count} images\n"
                   f"    CMS: {result}"
               )
               time.sleep(1)
