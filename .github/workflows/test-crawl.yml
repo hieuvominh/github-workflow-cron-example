@@ -9,8 +9,8 @@ on:
         default: https://www.theverge.com/rss/index.xml
 
   schedule:
-    # 23:00 giờ Việt Nam = 16:00 UTC
-    - cron: "0 16 * * *"
+    - cron: "5 23 * * *"
+      timezone: "Asia/Bangkok"
 
 permissions:
   contents: read
