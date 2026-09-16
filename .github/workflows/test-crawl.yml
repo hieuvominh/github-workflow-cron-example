@@ -9,10 +9,8 @@ on:
         default: https://www.theverge.com/rss/index.xml
 
   schedule:
-    # Temporary test schedule: 20:30, 21:00, and 21:30 in Vietnam/Thailand (UTC+7)
-    - cron: "30 13 * * *"
-    - cron: "0 14 * * *"
-    - cron: "30 14 * * *"
+    # 23:00 giờ Việt Nam = 16:00 UTC
+    - cron: "0 16 * * *"
 
 permissions:
   contents: read
