@@ -22,9 +22,12 @@ concurrency:
 jobs:
   test-crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     steps:
+      - name: Install article extractor
+        run: python -m pip install --disable-pip-version-check trafilatura==2.2.0
+
       - name: Crawl up to 10 articles and publish them
         shell: python
         env:
@@ -34,8 +37,11 @@ jobs:
         run: |
           import json
           import os
+          import re
+          import time
           import xml.etree.ElementTree as ET
           import urllib.request
+          import trafilatura
 
           FEED_URL = os.environ["FEED_URL"]
           BYTEKORA_URL = os.environ["BYTEKORA_URL"]
@@ -79,11 +85,28 @@ jobs:
               raise SystemExit("No RSS/Atom articles found")
 
           for number, (title, url) in enumerate(articles, 1):
+              downloaded = trafilatura.fetch_url(url)
+              extracted = trafilatura.extract(
+                  downloaded,
+                  include_comments=False,
+                  include_tables=False,
+                  favor_precision=True,
+                  output_format="txt",
+              ) if downloaded else None
+
+              if not extracted or len(extracted) < 200:
+                  print(f"{number:02}. Skipped: could not extract enough content from {url}")
+                  continue
+
+              clean_text = re.sub(r"\n{3,}", "\n\n", extracted).strip()
+              excerpt = re.sub(r"\s+", " ", clean_text)[:300].strip()
+              body = clean_text[:18_000].rstrip() + f"\n\nOriginal source: {url}"
+
               article = {
                   "externalSourceID": url,
                   "title": title[:180],
-                  "excerpt": f"Imported from {url}"[:320],
-                  "body": f"Sandbox import from the original article: {url}",
+                  "excerpt": excerpt,
+                  "body": body,
                   "categorySlug": "news",
                   "publish": True,
               }
@@ -107,5 +130,7 @@ jobs:
               print(
                   f"{number:02}. {title}\n"
                   f"    {url}\n"
+                  f"    Extracted: {len(clean_text)} characters\n"
                   f"    CMS: {result}"
               )
+              time.sleep(1)
