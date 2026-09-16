@@ -1,4 +1,4 @@
-name: Test Bytekora crawler
+name: Test crawl and create draft
 
 on:
   workflow_dispatch:
@@ -8,8 +8,16 @@ on:
         required: true
         default: https://www.theverge.com/rss/index.xml
 
+  schedule:
+    # 08:15 and 20:15 in Vietnam/Thailand (UTC+7)
+    - cron: "15 1,13 * * *"
+
 permissions:
   contents: read
+
+concurrency:
+  group: bytekora-crawler
+  cancel-in-progress: false
 
 jobs:
   test-crawl:
@@ -17,38 +25,81 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Download feed
-        shell: bash
-        env:
-          FEED_URL: ${{ inputs.feed_url }}
-        run: |
-          curl --location --fail --show-error --retry 3 \
-            --user-agent "BytekoraBot/0.1" \
-            --output feed.xml \
-            "$FEED_URL"
-
-      - name: Show first 10 articles
+      - name: Crawl up to 10 articles and create CMS drafts
         shell: python
+        env:
+          FEED_URL: ${{ inputs.feed_url || 'https://www.theverge.com/rss/index.xml' }}
+          BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
+          INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
         run: |
+          import json
           import xml.etree.ElementTree as ET
+          import urllib.request
 
-          root = ET.parse("feed.xml").getroot()
-          items = root.findall(".//item")
+          feed_request = urllib.request.Request(
+              FEED_URL,
+              headers={"User-Agent": "BytekoraBot/0.1"},
+          )
+
+          with urllib.request.urlopen(feed_request, timeout=30) as response:
+              root = ET.fromstring(response.read())
+
+          items = root.findall(".//item")[:10]
 
           if items:
               articles = [
                   (item.findtext("title"), item.findtext("link"))
-                  for item in items[:10]
+                  for item in items
               ]
           else:
               ns = {"atom": "http://www.w3.org/2005/Atom"}
               articles = []
+
               for entry in root.findall("atom:entry", ns)[:10]:
                   link = entry.find("atom:link", ns)
-                  articles.append((entry.findtext("atom:title", namespaces=ns), link.get("href")))
+                  articles.append(
+                      (
+                          entry.findtext("atom:title", namespaces=ns),
+                          link.get("href") if link is not None else None,
+                      )
+                  )
+
+          articles = [
+              (title, url)
+              for title, url in articles
+              if title and url
+          ]
 
           if not articles:
               raise SystemExit("No RSS/Atom articles found")
 
           for number, (title, url) in enumerate(articles, 1):
-              print(f"{number:02}. {title}\n    {url}")
+              article = {
+                  "externalSourceID": url,
+                  "title": title[:180],
+                  "excerpt": f"Imported from {url}"[:320],
+                  "body": f"Sandbox import from the original article: {url}",
+                  "categorySlug": "news",
+              }
+
+              post_request = urllib.request.Request(
+                  f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts",
+                  data=json.dumps(article).encode(),
+                  headers={
+                      "Authorization": f"Bearer {INGEST_SECRET}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+
+              with urllib.request.urlopen(
+                  post_request,
+                  timeout=30,
+              ) as response:
+                  result = json.loads(response.read())
+
+              print(
+                  f"{number:02}. {title}\n"
+                  f"    {url}\n"
+                  f"    CMS: {result}"
+              )
