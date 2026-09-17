@@ -40,7 +40,7 @@ When extractionMode is "structured", the crawler is confident that it identified
   ]
 }
 
-Use the supplied block types and levels when extractionMode is "structured". Rewrite every text block and return every numeric block id exactly once.
+Treat the supplied block types and levels as strong structural evidence when extractionMode is "structured". Correct a label only when the text clearly functions as a different type. Rewrite every text block and return every numeric block id exactly once.
 
 FORMAT B: RAW FALLBACK INPUT
 
@@ -90,10 +90,14 @@ Return exactly one valid JSON object matching this structure:
   "blocks": [
     {
       "id": 0,
+      "type": "paragraph",
+      "level": "none",
       "text": "Rewritten paragraph"
     },
     {
       "id": 2,
+      "type": "heading",
+      "level": "h2",
       "text": "Rewritten heading"
     }
   ]
@@ -111,7 +115,7 @@ FIELD REQUIREMENTS
 - featured: Set true only for a development with broad industry significance.
 - trending: Set true only when the source provides strong evidence that the topic is receiving substantial current attention.
 - readingTime: Estimate the number of minutes required to read the rewritten article. Minimum 1.
-- blocks: Return exactly one rewritten block for every input block ID.
+- blocks: Return exactly one rewritten and classified block for every input block ID. Each block must contain id, type, level and text.
 
 TAXONOMY RULES
 
@@ -140,8 +144,10 @@ BLOCK REQUIREMENTS
 - Keep every block ID exactly unchanged.
 - Preserve the original block order.
 - Do not omit, duplicate or invent block IDs.
-- Rewrite headings as concise headings.
-- Rewrite paragraphs as complete editorial paragraphs.
+- Assign type "heading" only when the block functions as a section heading; otherwise use "paragraph".
+- For headings, set level to "h2" or "h3" and rewrite the text as a concise heading.
+- For paragraphs, set level to "none" and rewrite the text as a complete editorial paragraph.
+- Preserve reliable source heading levels. In raw_fallback mode, infer type and heading level from meaning and surrounding blocks.
 - Do not merge multiple input blocks into one output block.
 - Do not split one input block into multiple output blocks.
 - Every returned text value must be non-empty.

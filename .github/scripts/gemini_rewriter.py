@@ -71,9 +71,17 @@ RESPONSE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "id": {"type": "integer"},
+                    "type": {
+                        "type": "string",
+                        "enum": ["paragraph", "heading"],
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["none", "h2", "h3"],
+                    },
                     "text": {"type": "string"},
                 },
-                "required": ["id", "text"],
+                "required": ["id", "type", "level", "text"],
             },
         },
     },
@@ -261,7 +269,9 @@ Mandatory rules:
 - Do not copy distinctive wording from the source.
 - Keep every returned block id exactly equal to an input block id.
 - Preserve the input block order and return one rewritten text value per input block.
-- Keep headings as headings and paragraphs as paragraphs; do not add image placeholders.
+- Classify every text block as either a heading or a paragraph. Correct unreliable source labels when necessary.
+- Use level "h2" or "h3" for headings and "none" for paragraphs.
+- Do not add image placeholders.
 - The title must be accurate and no longer than 180 characters.
 - The excerpt must be no longer than 300 characters.
 - Do not include Markdown fences or commentary outside the JSON response.
@@ -354,8 +364,25 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     for item in result.get("blocks", []):
         block_id = item.get("id")
         text = str(item.get("text", "")).strip()
-        if block_id in valid_ids and text:
-            rewritten_by_id[block_id] = text
+        block_type = item.get("type")
+        level = item.get("level")
+        if block_id not in valid_ids:
+            raise RuntimeError(f"Gemini returned unknown block id {block_id}")
+        if block_id in rewritten_by_id:
+            raise RuntimeError(f"Gemini duplicated block id {block_id}")
+        if not text:
+            raise RuntimeError(f"Gemini returned empty text for block id {block_id}")
+        if block_type not in ("paragraph", "heading"):
+            raise RuntimeError(f"Gemini returned invalid type for block id {block_id}")
+        if block_type == "heading" and level not in ("h2", "h3"):
+            raise RuntimeError(f"Gemini returned invalid heading level for block id {block_id}")
+        if block_type == "paragraph" and level != "none":
+            raise RuntimeError(f"Gemini returned a level for paragraph block id {block_id}")
+        rewritten_by_id[block_id] = {
+            "text": text,
+            "type": block_type,
+            "level": level,
+        }
 
     missing_ids = valid_ids.difference(rewritten_by_id)
     if missing_ids:
@@ -366,7 +393,22 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     rewritten_blocks = []
     for block_id, block in enumerate(blocks):
         if block_id in rewritten_by_id:
-            rewritten_blocks.append({**block, "text": rewritten_by_id[block_id]})
+            rewritten = rewritten_by_id[block_id]
+            if rewritten["type"] == "heading":
+                rewritten_blocks.append(
+                    {
+                        "type": "heading",
+                        "level": rewritten["level"],
+                        "text": rewritten["text"],
+                    }
+                )
+            else:
+                rewritten_blocks.append(
+                    {
+                        "type": "paragraph",
+                        "text": rewritten["text"],
+                    }
+                )
         else:
             rewritten_blocks.append(block)
 
