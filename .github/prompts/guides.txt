@@ -1,0 +1,1 @@
+Write in fluent English as a clear practical guide. Preserve prerequisites, warnings and step order. Make instructions easy to scan, but do not invent steps or claim that an unverified procedure is safe or universally compatible.

@@ -1,0 +1,5 @@
+# Local development only. Copy this file to api_keys.txt.
+# One Gemini API key per line, or separate multiple keys with commas.
+# Never commit api_keys.txt.
+YOUR_GEMINI_KEY_1
+YOUR_GEMINI_KEY_2
