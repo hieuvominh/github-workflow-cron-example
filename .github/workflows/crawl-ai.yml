@@ -30,7 +30,7 @@ jobs:
         env:
           CATEGORY_SLUG: ai
           FEED_URLS: >-
-            ${{ inputs.feed_url || 'https://techcrunch.com/category/artificial-intelligence/feed/,https://www.artificialintelligence-news.com/feed/' }}
+            ${{ inputs.feed_url || 'https://techcrunch.com/category/artificial-intelligence/feed/,https://www.theverge.com/rss/ai-artificial-intelligence/index.xml,https://www.geeky-gadgets.com/category/artificial-intelligence/feed/' }}
           PUBLISHED_TODAY_ONLY: "true"
           CONTENT_TIMEZONE: Asia/Bangkok
           FEED_MAX_PAGES: "10"
