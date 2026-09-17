@@ -296,6 +296,9 @@ def collect_articles():
 
     for feed_url in SOURCE_FEED_URLS:
         print(f"Reading feed: {feed_url}")
+        pages_read = 0
+        scanned_item_count = 0
+        source_article_count = 0
         for page in range(1, FEED_MAX_PAGES + 1):
             page_url = feed_page_url(feed_url, page)
             feed_request = urllib.request.Request(
@@ -312,6 +315,8 @@ def collect_articles():
             page_articles = parse_feed(root)
             if not page_articles:
                 break
+            pages_read += 1
+            scanned_item_count += len(page_articles)
 
             reached_older_article = False
             for article in page_articles:
@@ -340,16 +345,29 @@ def collect_articles():
                         published_at.isoformat() if published_at else None,
                     )
                 )
+                source_article_count += 1
 
             if not PUBLISHED_TODAY_ONLY or reached_older_article:
                 break
+
+        scope = f" for {target_date.isoformat()}" if PUBLISHED_TODAY_ONLY else ""
+        print(
+            f"    Found {source_article_count} eligible article(s){scope}; "
+            f"scanned {scanned_item_count} item(s) across {pages_read} page(s)"
+        )
 
     articles.sort(
         key=lambda article: parse_published_at(article[2])
         or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
+    print(
+        f"Found {len(articles)} unique eligible article(s) "
+        f"across {len(SOURCE_FEED_URLS)} configured feed(s)"
+    )
     if MAX_ARTICLES:
+        if len(articles) > MAX_ARTICLES:
+            print(f"Processing the newest {MAX_ARTICLES} article(s) due to MAX_ARTICLES")
         return articles[:MAX_ARTICLES]
 
     return articles
