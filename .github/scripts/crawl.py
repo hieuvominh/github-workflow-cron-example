@@ -48,6 +48,31 @@ IMAGE_WEBP_QUALITY = min(95, max(60, int(os.environ.get("IMAGE_WEBP_QUALITY", "8
 IMAGE_DOWNLOAD_MAX_BYTES = 30_000_000
 IMAGE_UPLOAD_MAX_BYTES = 15_000_000
 
+PROMOTIONAL_LABELS = {
+    "advertisement",
+    "advertorial",
+    "brand studio",
+    "branded content",
+    "partner content",
+    "partner post",
+    "paid content",
+    "promoted",
+    "promotion",
+    "sponsored",
+    "sponsored content",
+    "sponsored post",
+}
+PROMOTIONAL_URL_PARTS = (
+    "/advertorial/",
+    "/brand-studio/",
+    "/branded-content/",
+    "/partner-content/",
+    "/paid-content/",
+    "/promoted/",
+    "/sponsored/",
+    "/sponsored-content/",
+)
+
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
 if not SOURCE_FEED_URLS:
@@ -154,7 +179,9 @@ def extract_page_media(downloaded, article_url):
 
     jw_players = document.xpath(
         "//*[contains(concat(' ', normalize-space(@class), ' '), "
-        "' wp-block-techcrunch-jw-player-embed ')]"
+        "' wp-block-techcrunch-jw-player-embed ') and "
+        "not(contains(concat(' ', normalize-space(@class), ' '), "
+        "' jw-player-inline-promo '))]"
     )
     for player in jw_players:
         script_sources = player.xpath(".//script/@src")
@@ -262,6 +289,11 @@ def parse_feed(root):
                 "title": item.findtext("title"),
                 "url": item.findtext("link"),
                 "published_at": parse_published_at(item.findtext("pubDate")),
+                "labels": [
+                    (category.text or "").strip()
+                    for category in item.findall("category")
+                    if (category.text or "").strip()
+                ],
             }
             for item in items
         ]
@@ -285,9 +317,41 @@ def parse_feed(root):
                 "title": entry.findtext("atom:title", namespaces=namespace),
                 "url": link.get("href") if link is not None else None,
                 "published_at": parse_published_at(published or updated),
+                "labels": [
+                    (category.get("term") or category.get("label") or "").strip()
+                    for category in entry.findall("atom:category", namespace)
+                    if (category.get("term") or category.get("label") or "").strip()
+                ],
             }
         )
     return articles
+
+
+def promotional_reason(title, url, labels):
+    normalized_labels = {
+        re.sub(r"\s+", " ", str(label).strip().lower())
+        for label in labels or []
+    }
+    blocked_labels = sorted(normalized_labels.intersection(PROMOTIONAL_LABELS))
+    if blocked_labels:
+        return f"feed label: {', '.join(blocked_labels)}"
+
+    normalized_url = urllib.parse.unquote(url or "").lower()
+    blocked_url_part = next(
+        (part for part in PROMOTIONAL_URL_PARTS if part in normalized_url),
+        None,
+    )
+    if blocked_url_part:
+        return f"URL path: {blocked_url_part}"
+
+    normalized_title = re.sub(r"\s+", " ", title or "").strip().lower()
+    promotional_title = r"(?:sponsored(?: post)?|promoted|advertorial|partner content|branded content|paid content)"
+    if re.match(rf"^\[{promotional_title}\]\s*", normalized_title) or re.match(
+        rf"^{promotional_title}\s*[:|-]\s*",
+        normalized_title,
+    ):
+        return "promotional title prefix"
+    return None
 
 
 def parse_feed_document(data, page_url):
@@ -384,6 +448,11 @@ def collect_articles():
                 url = article["url"]
                 published_at = article["published_at"]
                 if not title or not url or url in seen_urls:
+                    continue
+
+                promotion = promotional_reason(title, url, article.get("labels", []))
+                if promotion:
+                    print(f"Skipped promotional feed item ({promotion}): {title} — {url}")
                     continue
 
                 if PUBLISHED_TODAY_ONLY:
