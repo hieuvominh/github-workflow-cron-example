@@ -92,12 +92,14 @@ Return exactly one valid JSON object matching this structure:
       "id": 0,
       "type": "paragraph",
       "level": "none",
+      "sectionHeading": "What this development changes",
       "text": "Rewritten paragraph"
     },
     {
       "id": 2,
       "type": "heading",
       "level": "h2",
+      "sectionHeading": "",
       "text": "Rewritten heading"
     }
   ]
@@ -115,7 +117,7 @@ FIELD REQUIREMENTS
 - featured: Set true only for a development with broad industry significance.
 - trending: Set true only when the source provides strong evidence that the topic is receiving substantial current attention.
 - readingTime: Estimate the number of minutes required to read the rewritten article. Minimum 1.
-- blocks: Return exactly one rewritten and classified block for every input block ID. Each block must contain id, type, level and text.
+- blocks: Return exactly one rewritten and classified block for every input block ID. Each block must contain id, type, level, sectionHeading and text.
 
 TAXONOMY RULES
 
@@ -147,6 +149,9 @@ BLOCK REQUIREMENTS
 - Assign type "heading" only when the block functions as a section heading; otherwise use "paragraph".
 - For headings, set level to "h2" or "h3" and rewrite the text as a concise heading.
 - For paragraphs, set level to "none" and rewrite the text as a complete editorial paragraph.
+- sectionHeading: Use this to insert a new H2 immediately before a paragraph without replacing or shortening that paragraph. For articles with 6 or more text blocks, provide 2-5 meaningful section headings. For shorter articles, provide at least 1. Use "" for blocks that do not begin a new section.
+- Never set sectionHeading on a block whose type is already "heading".
+- Space section headings across the article and make them specific to the material that follows. Do not use generic labels such as "Introduction", "Overview" or "Conclusion".
 - Preserve reliable source heading levels. In raw_fallback mode, infer type and heading level from meaning and surrounding blocks.
 - Do not merge multiple input blocks into one output block.
 - Do not split one input block into multiple output blocks.

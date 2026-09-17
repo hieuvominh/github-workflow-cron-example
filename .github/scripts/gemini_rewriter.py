@@ -79,9 +79,10 @@ RESPONSE_SCHEMA = {
                         "type": "string",
                         "enum": ["none", "h2", "h3"],
                     },
+                    "sectionHeading": {"type": "string"},
                     "text": {"type": "string"},
                 },
-                "required": ["id", "type", "level", "text"],
+                "required": ["id", "type", "level", "sectionHeading", "text"],
             },
         },
     },
@@ -271,6 +272,7 @@ Mandatory rules:
 - Preserve the input block order and return one rewritten text value per input block.
 - Classify every text block as either a heading or a paragraph. Correct unreliable source labels when necessary.
 - Use level "h2" or "h3" for headings and "none" for paragraphs.
+- Create a navigable article structure without deleting paragraph content. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
 - Do not add image placeholders.
 - The title must be accurate and no longer than 180 characters.
 - The excerpt must be no longer than 300 characters.
@@ -366,6 +368,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         text = str(item.get("text", "")).strip()
         block_type = item.get("type")
         level = item.get("level")
+        section_heading = str(item.get("sectionHeading", "")).strip()[:500]
         if block_id not in valid_ids:
             raise RuntimeError(f"Gemini returned unknown block id {block_id}")
         if block_id in rewritten_by_id:
@@ -378,10 +381,15 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             raise RuntimeError(f"Gemini returned invalid heading level for block id {block_id}")
         if block_type == "paragraph" and level != "none":
             raise RuntimeError(f"Gemini returned a level for paragraph block id {block_id}")
+        if block_type == "heading" and section_heading:
+            raise RuntimeError(
+                f"Gemini returned sectionHeading on heading block id {block_id}"
+            )
         rewritten_by_id[block_id] = {
             "text": text,
             "type": block_type,
             "level": level,
+            "sectionHeading": section_heading,
         }
 
     missing_ids = valid_ids.difference(rewritten_by_id)
@@ -390,10 +398,47 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             f"Gemini omitted {len(missing_ids)} required article blocks"
         )
 
+    classified_headings = [
+        block["text"]
+        for block in rewritten_by_id.values()
+        if block["type"] == "heading"
+    ]
+    inserted_headings = [
+        block["sectionHeading"]
+        for block in rewritten_by_id.values()
+        if block["sectionHeading"]
+    ]
+    heading_count = len(classified_headings) + len(inserted_headings)
+    required_heading_count = 2 if len(source_blocks) >= 6 else 1
+    if heading_count < required_heading_count:
+        raise RuntimeError(
+            "Gemini did not create enough section headings "
+            f"({heading_count}/{required_heading_count}); "
+            f"classified={len(classified_headings)}, inserted={len(inserted_headings)}"
+        )
+
+    print(
+        "    Gemini structure: "
+        f"{len(classified_headings)} classified heading(s), "
+        f"{len(inserted_headings)} inserted heading(s)"
+    )
+    for heading in classified_headings:
+        print(f"      H(source): {heading}")
+    for heading in inserted_headings:
+        print(f"      H(inserted): {heading}")
+
     rewritten_blocks = []
     for block_id, block in enumerate(blocks):
         if block_id in rewritten_by_id:
             rewritten = rewritten_by_id[block_id]
+            if rewritten["sectionHeading"]:
+                rewritten_blocks.append(
+                    {
+                        "type": "heading",
+                        "level": "h2",
+                        "text": rewritten["sectionHeading"],
+                    }
+                )
             if rewritten["type"] == "heading":
                 rewritten_blocks.append(
                     {
