@@ -14,13 +14,24 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import trafilatura
+from lxml import html as lxml_html
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from gemini_rewriter import rewrite_article
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
-FEED_URL = os.environ.get("FEED_URL", "").strip()
+RAW_FEED_URLS = (
+    os.environ.get("FEED_URLS", "").strip()
+    or os.environ.get("FEED_URL", "").strip()
+)
+SOURCE_FEED_URLS = list(
+    dict.fromkeys(
+        value.strip()
+        for value in re.split(r"[,;\r\n]+", RAW_FEED_URLS)
+        if value.strip()
+    )
+)
 BYTEKORA_URL = os.environ["BYTEKORA_URL"]
 INGEST_SECRET = os.environ["INGEST_SECRET"]
 MEDIA_REPO = os.environ["MEDIA_REPO"]
@@ -38,10 +49,10 @@ IMAGE_UPLOAD_MAX_BYTES = 15_000_000
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
-if not FEED_URL:
+if not SOURCE_FEED_URLS:
     print(
         f"Skipped {CATEGORY_SLUG}: configure "
-        f"{CATEGORY_SLUG.upper()}_FEED_URL in repository variables"
+        "FEED_URLS in the workflow"
     )
     raise SystemExit(0)
 
@@ -55,6 +66,159 @@ def tag_name(element):
 
 def element_text(element):
     return re.sub(r"\s+", " ", "".join(element.itertext())).strip()
+
+
+def normalized_text(value):
+    return re.sub(r"\W+", " ", value.lower()).strip()
+
+
+def youtube_embed_url(value):
+    if not value:
+        return None
+    parsed = urllib.parse.urlsplit(value)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    video_id = None
+    if host in ("youtu.be", "www.youtu.be"):
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+    elif host in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+        if parsed.path.startswith("/embed/"):
+            video_id = parsed.path.split("/embed/", 1)[1].split("/", 1)[0]
+        elif parsed.path == "/watch":
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
+        elif parsed.path.startswith("/shorts/"):
+            video_id = parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+    if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+        return None
+    return f"https://www.youtube.com/embed/{video_id}"
+
+
+def extract_page_media(downloaded, article_url):
+    try:
+        document = lxml_html.fromstring(downloaded)
+    except (TypeError, ValueError, lxml_html.etree.ParserError):
+        return None, []
+
+    hero = None
+    hero_images = document.xpath(
+        "//*[contains(concat(' ', normalize-space(@class), ' '), "
+        "' article-hero__first-section ')]//img[1]"
+    )
+    if hero_images:
+        image = hero_images[0]
+        source = image.get("src") or image.get("data-lazy-src")
+        if source:
+            figure = image.xpath("ancestor::figure[1]")
+            captions = figure[0].xpath(".//figcaption") if figure else []
+            hero = {
+                "type": "pending_image",
+                "source": urllib.parse.urljoin(article_url, source),
+                "alt": (image.get("alt") or "")[:500],
+                "caption": (element_text(captions[0]) if captions else "")[:1_000],
+            }
+    if not hero:
+        og_images = document.xpath(
+            "//meta[translate(@property, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
+            "'abcdefghijklmnopqrstuvwxyz')='og:image']/@content"
+        )
+        if og_images:
+            hero = {
+                "type": "pending_image",
+                "source": urllib.parse.urljoin(article_url, og_images[0]),
+                "alt": "",
+                "caption": "",
+            }
+
+    videos = []
+    seen_video_urls = set()
+
+    def add_video(node, provider, embed_url, title=""):
+        if not embed_url or embed_url in seen_video_urls:
+            return
+        seen_video_urls.add(embed_url)
+        previous_paragraphs = node.xpath("preceding::p[normalize-space()][1]")
+        videos.append(
+            {
+                "type": "pending_video",
+                "provider": provider,
+                "url": embed_url,
+                "title": title[:300] or "Embedded video",
+                "sourceUrl": article_url,
+                "afterText": (
+                    element_text(previous_paragraphs[0])
+                    if previous_paragraphs
+                    else ""
+                ),
+            }
+        )
+
+    jw_players = document.xpath(
+        "//*[contains(concat(' ', normalize-space(@class), ' '), "
+        "' wp-block-techcrunch-jw-player-embed ')]"
+    )
+    for player in jw_players:
+        script_sources = player.xpath(".//script/@src")
+        script_text = "\n".join(player.xpath(".//script/text()"))
+        library_id = next(
+            (
+                match.group(1)
+                for source in script_sources
+                if (match := re.search(r"/libraries/([A-Za-z0-9_-]+)\.js", source))
+            ),
+            None,
+        )
+        media_match = re.search(
+            r"cdn\.jwplayer\.com/v2/media/([A-Za-z0-9_-]+)",
+            script_text,
+        )
+        if library_id and media_match:
+            media_id = media_match.group(1)
+            add_video(
+                player,
+                "jwplayer",
+                f"https://cdn.jwplayer.com/players/{media_id}-{library_id}.html",
+                "TechCrunch video",
+            )
+
+    for iframe in document.xpath("//iframe[@src]"):
+        embed_url = youtube_embed_url(iframe.get("src"))
+        if embed_url:
+            add_video(
+                iframe,
+                "youtube",
+                embed_url,
+                iframe.get("title") or "YouTube video",
+            )
+
+    youtube_links = document.xpath(
+        "//*[contains(concat(' ', normalize-space(@class), ' '), "
+        "' wp-block-embed-youtube ')]//a[@href]"
+    )
+    for link in youtube_links:
+        embed_url = youtube_embed_url(link.get("href"))
+        if embed_url:
+            add_video(link, "youtube", embed_url, element_text(link))
+
+    return hero, videos
+
+
+def add_page_media(blocks, hero, videos):
+    if hero:
+        blocks.insert(0, hero)
+
+    for video in videos:
+        insertion_index = len(blocks)
+        anchor = normalized_text(video.pop("afterText", ""))
+        if anchor:
+            for index in range(len(blocks) - 1, -1, -1):
+                block = blocks[index]
+                if block.get("type") not in ("paragraph", "heading"):
+                    continue
+                candidate = normalized_text(block.get("text", ""))
+                if candidate == anchor or candidate in anchor or anchor in candidate:
+                    insertion_index = index + 1
+                    break
+        blocks.insert(insertion_index, video)
+    return blocks
 
 
 def feed_page_url(feed_url, page):
@@ -130,51 +294,63 @@ def collect_articles():
     articles = []
     seen_urls = set()
 
-    for page in range(1, FEED_MAX_PAGES + 1):
-        page_url = feed_page_url(FEED_URL, page)
-        feed_request = urllib.request.Request(
-            page_url,
-            headers={"User-Agent": "BYTERMINALBot/0.1"},
-        )
-        with urllib.request.urlopen(feed_request, timeout=30) as response:
-            root = ET.fromstring(response.read())
-
-        page_articles = parse_feed(root)
-        if not page_articles:
-            break
-
-        reached_older_article = False
-        for article in page_articles:
-            title = article["title"]
-            url = article["url"]
-            published_at = article["published_at"]
-            if not title or not url or url in seen_urls:
-                continue
-
-            if PUBLISHED_TODAY_ONLY:
-                if not published_at:
-                    print(f"Skipped undated feed item: {url}")
-                    continue
-                local_date = published_at.astimezone(ZoneInfo(CONTENT_TIMEZONE)).date()
-                if local_date < target_date:
-                    reached_older_article = True
-                    continue
-                if local_date > target_date:
-                    continue
-
-            seen_urls.add(url)
-            articles.append(
-                (
-                    title,
-                    url,
-                    published_at.isoformat() if published_at else None,
-                )
+    for feed_url in SOURCE_FEED_URLS:
+        print(f"Reading feed: {feed_url}")
+        for page in range(1, FEED_MAX_PAGES + 1):
+            page_url = feed_page_url(feed_url, page)
+            feed_request = urllib.request.Request(
+                page_url,
+                headers={"User-Agent": "BYTERMINALBot/0.1"},
             )
-            if MAX_ARTICLES and len(articles) >= MAX_ARTICLES:
-                return articles
+            try:
+                with urllib.request.urlopen(feed_request, timeout=30) as response:
+                    root = ET.fromstring(response.read())
+            except (urllib.error.URLError, TimeoutError, ET.ParseError) as error:
+                print(f"    Feed page skipped: {page_url}: {error}")
+                break
 
-        if not PUBLISHED_TODAY_ONLY or reached_older_article:
-            break
+            page_articles = parse_feed(root)
+            if not page_articles:
+                break
+
+            reached_older_article = False
+            for article in page_articles:
+                title = article["title"]
+                url = article["url"]
+                published_at = article["published_at"]
+                if not title or not url or url in seen_urls:
+                    continue
+
+                if PUBLISHED_TODAY_ONLY:
+                    if not published_at:
+                        print(f"Skipped undated feed item: {url}")
+                        continue
+                    local_date = published_at.astimezone(ZoneInfo(CONTENT_TIMEZONE)).date()
+                    if local_date < target_date:
+                        reached_older_article = True
+                        continue
+                    if local_date > target_date:
+                        continue
+
+                seen_urls.add(url)
+                articles.append(
+                    (
+                        title,
+                        url,
+                        published_at.isoformat() if published_at else None,
+                    )
+                )
+
+            if not PUBLISHED_TODAY_ONLY or reached_older_article:
+                break
+
+    articles.sort(
+        key=lambda article: parse_published_at(article[2])
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    if MAX_ARTICLES:
+        return articles[:MAX_ARTICLES]
 
     return articles
 
@@ -311,6 +487,7 @@ def upload_image(source_url, article_url):
 
 
 def extract_blocks(downloaded, article_url):
+    hero, videos = extract_page_media(downloaded, article_url)
     extracted_xml = trafilatura.extract(
         downloaded,
         url=article_url,
@@ -381,7 +558,7 @@ def extract_blocks(downloaded, article_url):
             walk(child)
 
     walk(main)
-    return blocks
+    return add_page_media(blocks, hero, videos)
 
 
 articles = collect_articles()
@@ -424,6 +601,17 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     image_count = 0
     seen_hosted_images = set()
     for block in blocks:
+        if block["type"] == "pending_video":
+            uploaded_blocks.append(
+                {
+                    "type": "video",
+                    "provider": block["provider"],
+                    "url": block["url"],
+                    "title": block["title"],
+                    "sourceUrl": block["sourceUrl"],
+                }
+            )
+            continue
         if block["type"] != "pending_image":
             uploaded_blocks.append(block)
             continue
