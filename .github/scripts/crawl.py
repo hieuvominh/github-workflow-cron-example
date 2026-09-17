@@ -14,6 +14,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import trafilatura
+from lxml import etree as lxml_etree
 from lxml import html as lxml_html
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -289,6 +290,70 @@ def parse_feed(root):
     return articles
 
 
+def parse_feed_document(data, page_url):
+    try:
+        return ET.fromstring(data)
+    except ET.ParseError as strict_error:
+        decoded = data.decode("utf-8", errors="replace")
+        cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", decoded)
+        cleaned = re.sub(
+            r"&(?!#\d+;|#x[0-9A-Fa-f]+;|[A-Za-z][A-Za-z0-9._:-]*;)",
+            "&amp;",
+            cleaned,
+        )
+        try:
+            return ET.fromstring(cleaned.encode("utf-8"))
+        except ET.ParseError:
+            parser = lxml_etree.XMLParser(
+                recover=True,
+                no_network=True,
+                resolve_entities=False,
+            )
+            recovered = lxml_etree.fromstring(cleaned.encode("utf-8"), parser=parser)
+            if recovered is None or recovered.tag.rsplit("}", 1)[-1] not in ("rss", "feed"):
+                preview = re.sub(r"\s+", " ", cleaned[:240]).strip()
+                raise ET.ParseError(
+                    f"Invalid RSS/Atom response from {page_url}; "
+                    f"strict error: {strict_error}; response starts with: {preview!r}"
+                ) from strict_error
+            print(f"    Recovered malformed XML from {page_url}")
+            return recovered
+
+
+def fetch_feed_root(page_url):
+    last_error = None
+    content_type = "unavailable"
+    for attempt in range(1, 4):
+        feed_request = urllib.request.Request(
+            page_url,
+            headers={
+                "User-Agent": "BYTERMINALBot/0.1 (+https://bytekora.com)",
+                "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8",
+            },
+        )
+        try:
+            with urllib.request.urlopen(feed_request, timeout=30) as response:
+                data = response.read()
+                content_type = response.headers.get("Content-Type", "unknown")
+            root = parse_feed_document(data, page_url)
+            return root
+        except (urllib.error.URLError, TimeoutError, ET.ParseError, lxml_etree.XMLSyntaxError) as error:
+            last_error = error
+            if attempt < 3:
+                delay = attempt * 5
+                print(
+                    f"    Feed read attempt {attempt}/3 failed for {page_url}: {error}; "
+                    f"retrying in {delay}s"
+                )
+                time.sleep(delay)
+                continue
+            print(
+                f"    Feed response could not be parsed after 3 attempts; "
+                f"content type: {content_type}"
+            )
+    raise last_error or RuntimeError(f"Unable to read feed {page_url}")
+
+
 def collect_articles():
     target_date = datetime.now(ZoneInfo(CONTENT_TIMEZONE)).date()
     articles = []
@@ -301,14 +366,9 @@ def collect_articles():
         source_article_count = 0
         for page in range(1, FEED_MAX_PAGES + 1):
             page_url = feed_page_url(feed_url, page)
-            feed_request = urllib.request.Request(
-                page_url,
-                headers={"User-Agent": "BYTERMINALBot/0.1"},
-            )
             try:
-                with urllib.request.urlopen(feed_request, timeout=30) as response:
-                    root = ET.fromstring(response.read())
-            except (urllib.error.URLError, TimeoutError, ET.ParseError) as error:
+                root = fetch_feed_root(page_url)
+            except (urllib.error.URLError, TimeoutError, ET.ParseError, lxml_etree.XMLSyntaxError) as error:
                 print(f"    Feed page skipped: {page_url}: {error}")
                 break
 
