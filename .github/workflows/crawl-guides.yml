@@ -1,40 +1,45 @@
-# name: Crawl Guides
+name: Crawl Guides
 
-# on:
-#   workflow_dispatch:
-#     inputs:
-#       feed_url:
-#         description: Optional RSS or Atom override
-#         required: false
-#         default: ""
-#   schedule:
-#     - cron: "30 8,14,20 * * *"
-#       timezone: "Asia/Bangkok"
+on:
+  workflow_dispatch:
+    inputs:
+      feed_url:
+        description: Optional RSS or Atom override
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 7,15,23 * * *"
+      timezone: "Asia/Bangkok"
 
-# permissions:
-#   contents: read
+permissions:
+  contents: read
 
-# concurrency:
-#   group: bytekora-crawler-guides
-#   cancel-in-progress: false
+concurrency:
+  group: bytekora-crawler-guides
+  cancel-in-progress: false
 
-# jobs:
-#   crawl-guides:
-#     runs-on: ubuntu-latest
-#     timeout-minutes: 360
-#     steps:
-#       - uses: actions/checkout@v4
-#       - name: Install article extractor
-#         run: python -m pip install --disable-pip-version-check trafilatura==2.2.0 google-genai pillow
-#       - name: Crawl and publish Guides
-#         env:
-#           CATEGORY_SLUG: guides
-#           FEED_URL: ${{ inputs.feed_url || vars.GUIDES_FEED_URL }}
-#           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
-#           INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
-#           MEDIA_REPO: ${{ vars.MEDIA_REPO }}
-#           MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
-#           MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
-#           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-#           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
-#         run: python .github/scripts/crawl.py
+jobs:
+  crawl-guides:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install article extractor
+        run: python -m pip install --disable-pip-version-check trafilatura==2.2.0 google-genai pillow
+      - name: Crawl and publish Guides
+        env:
+          CATEGORY_SLUG: guides
+          FEED_URLS: >-
+            ${{ inputs.feed_url || 'https://www.theverge.com/rss/how-to/index.xml,https://www.geeky-gadgets.com/category/guides/feed/' }}
+          PUBLISHED_TODAY_ONLY: "true"
+          CONTENT_TIMEZONE: Asia/Bangkok
+          FEED_MAX_PAGES: "10"
+          MAX_ARTICLES: "0"
+          BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
+          INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
+          MEDIA_REPO: ${{ vars.MEDIA_REPO }}
+          MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
+          MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+        run: python .github/scripts/crawl.py

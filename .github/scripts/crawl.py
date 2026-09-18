@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import html
 import json
 import os
 import re
@@ -42,11 +43,29 @@ PUBLISHED_TODAY_ONLY = os.environ.get("PUBLISHED_TODAY_ONLY", "false").lower() =
 CONTENT_TIMEZONE = os.environ.get("CONTENT_TIMEZONE", "Asia/Bangkok")
 FEED_MAX_PAGES = max(1, int(os.environ.get("FEED_MAX_PAGES", "1")))
 MAX_ARTICLES = max(0, int(os.environ.get("MAX_ARTICLES", "10")))
+RAW_SOURCE_VERTICAL_RULES = os.environ.get("SOURCE_VERTICAL_RULES", "").strip()
 IMAGE_MAX_WIDTH = max(320, int(os.environ.get("IMAGE_MAX_WIDTH", "1600")))
 IMAGE_MAX_HEIGHT = max(320, int(os.environ.get("IMAGE_MAX_HEIGHT", "1600")))
 IMAGE_WEBP_QUALITY = min(95, max(60, int(os.environ.get("IMAGE_WEBP_QUALITY", "84"))))
 IMAGE_DOWNLOAD_MAX_BYTES = 30_000_000
 IMAGE_UPLOAD_MAX_BYTES = 15_000_000
+LAZY_IMAGE_ATTRIBUTES = (
+    "src",
+    "data-src",
+    "data-lazy-src",
+    "data-original",
+    "data-hi-res-src",
+)
+IMAGE_SIZE_SUFFIX = re.compile(r"-\d{2,5}(?:[x-]\d{1,4})?$")
+LEFTOVER_ENTITY = re.compile(r"&(?:#\d{2,6}|#x[0-9a-fA-F]{2,6}|[a-zA-Z]{2,10});")
+ARTICLE_LD_TYPES = {
+    "Article",
+    "NewsArticle",
+    "ReportageNewsArticle",
+    "BlogPosting",
+    "LiveBlogPosting",
+    "TechArticle",
+}
 
 PROMOTIONAL_LABELS = {
     "advertisement",
@@ -75,6 +94,29 @@ PROMOTIONAL_URL_PARTS = (
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
+
+def parse_source_vertical_rules(raw_rules):
+    rules = {}
+    for raw_rule in re.split(r"[,;\r\n]+", raw_rules or ""):
+        raw_rule = raw_rule.strip()
+        if not raw_rule:
+            continue
+        host, separator, raw_verticals = raw_rule.partition("=")
+        if not separator or not host.strip() or not raw_verticals.strip():
+            raise SystemExit(
+                "Invalid SOURCE_VERTICAL_RULES entry. "
+                "Use host=vertical|vertical, for example www.ign.com=games"
+            )
+        rules[host.strip().lower()] = {
+            vertical.strip().lower()
+            for vertical in raw_verticals.split("|")
+            if vertical.strip()
+        }
+    return rules
+
+
+SOURCE_VERTICAL_RULES = parse_source_vertical_rules(RAW_SOURCE_VERTICAL_RULES)
+
 if not SOURCE_FEED_URLS:
     print(
         f"Skipped {CATEGORY_SLUG}: configure "
@@ -98,6 +140,44 @@ def normalized_text(value):
     return re.sub(r"\W+", " ", value.lower()).strip()
 
 
+def source_vertical_allowed(downloaded, article_url):
+    host = urllib.parse.urlsplit(article_url).netloc.lower().split(":", 1)[0]
+    allowed_verticals = SOURCE_VERTICAL_RULES.get(host)
+    if not allowed_verticals:
+        return True
+
+    try:
+        document = lxml_html.fromstring(downloaded)
+    except (TypeError, ValueError, lxml_html.etree.ParserError):
+        print(f"    Source vertical could not be read for {host}")
+        return False
+
+    verticals = {
+        value.strip().lower()
+        for value in document.xpath(
+            "//meta[translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
+            "'abcdefghijklmnopqrstuvwxyz')='vertical']/@content"
+        )
+        if value.strip()
+    }
+    if not verticals:
+        print(f"    Source vertical is missing for {host}")
+        return False
+
+    if verticals.isdisjoint(allowed_verticals):
+        print(
+            f"    Source vertical rejected for {host}: "
+            f"{', '.join(sorted(verticals))}"
+        )
+        return False
+
+    print(
+        f"    Source vertical accepted for {host}: "
+        f"{', '.join(sorted(verticals))}"
+    )
+    return True
+
+
 def youtube_embed_url(value):
     if not value:
         return None
@@ -118,6 +198,132 @@ def youtube_embed_url(value):
     return f"https://www.youtube.com/embed/{video_id}"
 
 
+def decoded_text(value):
+    """Undo a second layer of HTML escaping.
+
+    lxml already resolves entities once. Some publishers escape twice, so
+    "Honor&amp;#039;s" survives parsing as the literal "Honor&#039;s". Only
+    unescape when an entity is still present, to leave text that genuinely
+    contains an ampersand alone.
+    """
+    value = value or ""
+    if LEFTOVER_ENTITY.search(value):
+        return html.unescape(value)
+    return value
+
+
+def image_source(element):
+    for attribute in LAZY_IMAGE_ATTRIBUTES:
+        value = (element.get(attribute) or "").strip()
+        if value and not value.lower().startswith("data:"):
+            return value
+    raw_srcset = element.get("srcset") or element.get("data-srcset") or ""
+    for candidate in raw_srcset.split(","):
+        value = candidate.strip().split(" ", 1)[0]
+        if value and not value.lower().startswith("data:"):
+            return value
+    return None
+
+
+def image_identity(source_url):
+    """Collapse CDN resize variants of one image onto a single key.
+
+    og:image and the in-body <img> rarely agree on the exact URL: WordPress
+    appends ?resize=1200,828 and Future CDN appends -1920-80 before the
+    extension. Both still point at the same upload, so compare the file stem
+    with query strings and trailing size suffixes removed.
+    """
+    path = urllib.parse.urlsplit(source_url).path
+    name = path.rsplit("/", 1)[-1].lower()
+    stem = name.rpartition(".")[0] or name
+    previous = None
+    while previous != stem:
+        previous = stem
+        stem = IMAGE_SIZE_SUFFIX.sub("", stem)
+    return stem or source_url.lower()
+
+
+def json_ld_image(document):
+    for blob in document.xpath("//script[@type='application/ld+json']/text()"):
+        try:
+            data = json.loads(blob)
+        except (ValueError, TypeError):
+            continue
+        pending = [data]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, list):
+                pending.extend(node)
+                continue
+            if not isinstance(node, dict):
+                continue
+            if "@graph" in node:
+                pending.extend(
+                    node["@graph"]
+                    if isinstance(node["@graph"], list)
+                    else [node["@graph"]]
+                )
+                continue
+            node_type = node.get("@type")
+            if isinstance(node_type, list):
+                node_type = node_type[0] if node_type else ""
+            if node_type not in ARTICLE_LD_TYPES:
+                continue
+            image = node.get("image")
+            if isinstance(image, list):
+                image = image[0] if image else None
+            if isinstance(image, dict):
+                image = image.get("url")
+            if isinstance(image, str) and image.strip():
+                return image.strip()
+    return None
+
+
+def meta_content(document, attribute, name):
+    return document.xpath(
+        f"//meta[translate(@{attribute}, "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')"
+        f"='{name}']/@content"
+    )
+
+
+def hero_source_url(document):
+    """Every supported publisher exposes the lead image as a social card.
+
+    Site-specific class names were tried first and proved unmaintainable: the
+    one selector this crawler carried stopped matching when its publisher
+    redesigned, silently and with no other symptom.
+    """
+    for attribute, name in (
+        ("property", "og:image"),
+        ("property", "og:image:url"),
+        ("name", "twitter:image"),
+        ("name", "twitter:image:src"),
+    ):
+        for value in meta_content(document, attribute, name):
+            value = (value or "").strip()
+            if value and not value.lower().startswith("data:"):
+                return value
+    return json_ld_image(document)
+
+
+def hero_figure_details(document, identity):
+    """Recover alt text and caption by locating the hero inside the article."""
+    for figure in document.xpath("//article//figure | //main//figure | //figure"):
+        images = figure.xpath(".//img")
+        if not images:
+            continue
+        source = image_source(images[0])
+        if not source or image_identity(source) != identity:
+            continue
+        captions = figure.xpath(".//figcaption")
+        return (
+            decoded_text(images[0].get("alt"))[:500],
+            decoded_text(element_text(captions[0]) if captions else "")[:1_000],
+        )
+    return "", ""
+
+
 def extract_page_media(downloaded, article_url):
     try:
         document = lxml_html.fromstring(downloaded)
@@ -125,34 +331,35 @@ def extract_page_media(downloaded, article_url):
         return None, []
 
     hero = None
-    hero_images = document.xpath(
-        "//*[contains(concat(' ', normalize-space(@class), ' '), "
-        "' article-hero__first-section ')]//img[1]"
-    )
-    if hero_images:
-        image = hero_images[0]
-        source = image.get("src") or image.get("data-lazy-src")
-        if source:
-            figure = image.xpath("ancestor::figure[1]")
-            captions = figure[0].xpath(".//figcaption") if figure else []
+    source = hero_source_url(document)
+    if source:
+        absolute_source = urllib.parse.urljoin(article_url, source)
+        identity = image_identity(absolute_source)
+        alt, caption = hero_figure_details(document, identity)
+        hero = {
+            "type": "pending_image",
+            "source": absolute_source,
+            "alt": alt,
+            "caption": caption,
+        }
+    else:
+        for figure in document.xpath("//article//figure | //main//figure"):
+            images = figure.xpath(".//img")
+            figure_source = image_source(images[0]) if images else None
+            if not figure_source:
+                continue
+            captions = figure.xpath(".//figcaption")
             hero = {
                 "type": "pending_image",
-                "source": urllib.parse.urljoin(article_url, source),
-                "alt": (image.get("alt") or "")[:500],
-                "caption": (element_text(captions[0]) if captions else "")[:1_000],
+                "source": urllib.parse.urljoin(article_url, figure_source),
+                "alt": decoded_text(images[0].get("alt"))[:500],
+                "caption": decoded_text(
+                    element_text(captions[0]) if captions else ""
+                )[:1_000],
             }
+            break
     if not hero:
-        og_images = document.xpath(
-            "//meta[translate(@property, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
-            "'abcdefghijklmnopqrstuvwxyz')='og:image']/@content"
-        )
-        if og_images:
-            hero = {
-                "type": "pending_image",
-                "source": urllib.parse.urljoin(article_url, og_images[0]),
-                "alt": "",
-                "caption": "",
-            }
+        print(f"    Hero image not found for {article_url}")
 
     videos = []
     seen_video_urls = set()
@@ -572,8 +779,29 @@ def optimize_image(image_data, content_type):
         return None
 
 
+def encoded_url(value):
+    """Percent-encode non-ASCII path characters.
+
+    Publishers do put raw Unicode in upload paths (an em dash in a 9to5Mac
+    filename, for one). urlopen encodes the request line as ASCII, so such a
+    URL raises UnicodeEncodeError and the image is dropped.
+    """
+    split = urllib.parse.urlsplit(value)
+    return urllib.parse.urlunsplit(
+        (
+            split.scheme,
+            split.netloc.encode("idna").decode("ascii")
+            if not split.netloc.isascii()
+            else split.netloc,
+            urllib.parse.quote(split.path, safe="/%"),
+            urllib.parse.quote(split.query, safe="=&/%?+,:"),
+            split.fragment,
+        )
+    )
+
+
 def upload_image(source_url, article_url):
-    absolute_url = urllib.parse.urljoin(article_url, source_url)
+    absolute_url = encoded_url(urllib.parse.urljoin(article_url, source_url))
     request = urllib.request.Request(
         absolute_url,
         headers={"User-Agent": "BYTERMINALBot/0.1"},
@@ -655,6 +883,8 @@ def extract_blocks(downloaded, article_url):
     )
     blocks = []
     seen_image_sources = set()
+    if hero:
+        seen_image_sources.add(image_identity(hero["source"]))
 
     def walk(node):
         kind = tag_name(node)
@@ -689,15 +919,18 @@ def extract_blocks(downloaded, article_url):
             source = node.get("src")
             if source:
                 absolute_source = urllib.parse.urljoin(article_url, source)
-                if absolute_source in seen_image_sources:
+                identity = image_identity(absolute_source)
+                if identity in seen_image_sources:
                     return
-                seen_image_sources.add(absolute_source)
+                seen_image_sources.add(identity)
                 blocks.append(
                     {
                         "type": "pending_image",
                         "source": absolute_source,
-                        "alt": (node.get("alt") or node.get("title") or "")[:500],
-                        "caption": (node.get("title") or "")[:1_000],
+                        "alt": decoded_text(
+                            node.get("alt") or node.get("title")
+                        )[:500],
+                        "caption": decoded_text(node.get("title"))[:1_000],
                     }
                 )
             return
@@ -720,6 +953,9 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         continue
 
     downloaded = trafilatura.fetch_url(url)
+    if downloaded and not source_vertical_allowed(downloaded, url):
+        print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
+        continue
     blocks = extract_blocks(downloaded, url) if downloaded else []
     text_blocks = [
         block["text"]
