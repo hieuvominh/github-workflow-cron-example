@@ -58,6 +58,21 @@ LAZY_IMAGE_ATTRIBUTES = (
 )
 IMAGE_SIZE_SUFFIX = re.compile(r"-\d{2,5}(?:[x-]\d{1,4})?$")
 LEFTOVER_ENTITY = re.compile(r"&(?:#\d{2,6}|#x[0-9a-fA-F]{2,6}|[a-zA-Z]{2,10});")
+CLASS_TOKENS = re.compile(r"[\s\-_]+")
+NON_EDITORIAL_TOKENS = {
+    "author",
+    "authors",
+    "avatar",
+    "byline",
+    "contributor",
+    "profile",
+    "advert",
+    "advertisement",
+    "promo",
+    "sponsor",
+    "sponsored",
+}
+NON_EDITORIAL_DEPTH = 3
 ARTICLE_LD_TYPES = {
     "Article",
     "NewsArticle",
@@ -225,6 +240,39 @@ def image_source(element):
     return None
 
 
+def non_editorial_identities(document):
+    """Images that only ever appear in a byline or promo block.
+
+    Publishers using the Future plc template put the writer's portrait in
+    <img class="... author__avatar ..."> inside the article body, so the
+    extractor cannot tell it apart from a content image by position alone.
+    Class names survive only in the original DOM, not in trafilatura's
+    output, so the verdict is taken here and applied downstream.
+
+    An identity is rejected only when every one of its occurrences is
+    non-editorial: a lead image reused as a thumbnail in a "most popular"
+    rail must not be dropped because of that second placement.
+    """
+    verdicts = {}
+    for image in document.xpath("//img"):
+        source = image_source(image)
+        if not source:
+            continue
+        node = image
+        rejected = False
+        for _ in range(NON_EDITORIAL_DEPTH + 1):
+            if node is None:
+                break
+            tokens = set(CLASS_TOKENS.split((node.get("class") or "").lower()))
+            if tokens & NON_EDITORIAL_TOKENS:
+                rejected = True
+                break
+            node = node.getparent()
+        identity = image_identity(source)
+        verdicts[identity] = verdicts.get(identity, True) and rejected
+    return {identity for identity, rejected in verdicts.items() if rejected}
+
+
 def image_identity(source_url):
     """Collapse CDN resize variants of one image onto a single key.
 
@@ -328,8 +376,9 @@ def extract_page_media(downloaded, article_url):
     try:
         document = lxml_html.fromstring(downloaded)
     except (TypeError, ValueError, lxml_html.etree.ParserError):
-        return None, []
+        return None, [], set()
 
+    blocked = non_editorial_identities(document)
     hero = None
     source = hero_source_url(document)
     if source:
@@ -347,6 +396,10 @@ def extract_page_media(downloaded, article_url):
             images = figure.xpath(".//img")
             figure_source = image_source(images[0]) if images else None
             if not figure_source:
+                continue
+            if image_identity(
+                urllib.parse.urljoin(article_url, figure_source)
+            ) in blocked:
                 continue
             captions = figure.xpath(".//figcaption")
             hero = {
@@ -433,7 +486,7 @@ def extract_page_media(downloaded, article_url):
         if embed_url:
             add_video(link, "youtube", embed_url, element_text(link))
 
-    return hero, videos
+    return hero, videos, blocked
 
 
 def add_page_media(blocks, hero, videos):
@@ -862,7 +915,7 @@ def upload_image(source_url, article_url):
 
 
 def extract_blocks(downloaded, article_url):
-    hero, videos = extract_page_media(downloaded, article_url)
+    hero, videos, blocked = extract_page_media(downloaded, article_url)
     extracted_xml = trafilatura.extract(
         downloaded,
         url=article_url,
@@ -882,7 +935,7 @@ def extract_blocks(downloaded, article_url):
         document,
     )
     blocks = []
-    seen_image_sources = set()
+    seen_image_sources = set(blocked)
     if hero:
         seen_image_sources.add(image_identity(hero["source"]))
 
