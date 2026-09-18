@@ -30,7 +30,7 @@ jobs:
         env:
           CATEGORY_SLUG: phones
           FEED_URLS: >-
-            ${{ inputs.feed_url || 'https://www.theverge.com/rss/phones/index.xml,https://www.tomsguide.com/feeds/tag/phones,https://www.androidcentral.com/feeds/all' }}
+            ${{ inputs.feed_url || 'https://www.theverge.com/rss/phones/index.xml,https://www.tomsguide.com/feeds/tag/phones' }}
           PUBLISHED_TODAY_ONLY: "true"
           CONTENT_TIMEZONE: Asia/Bangkok
           FEED_MAX_PAGES: "10"
