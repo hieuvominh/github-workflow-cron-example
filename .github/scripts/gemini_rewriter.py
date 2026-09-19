@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from google import genai
@@ -79,6 +80,7 @@ RESPONSE_SCHEMA = {
         "reviewSummary": {
             "type": "object",
             "properties": {
+                "overallScore": {"type": "number", "minimum": 1, "maximum": 10},
                 "verdict": {"type": "string"},
                 "pros": {
                     "type": "array",
@@ -91,8 +93,38 @@ RESPONSE_SCHEMA = {
                     "maxItems": 8,
                 },
                 "shouldYouBuy": {"type": "string"},
+                "componentScores": {
+                    "type": "object",
+                    "properties": {
+                        "design": {"type": "number", "minimum": 1, "maximum": 10},
+                        "display": {"type": "number", "minimum": 1, "maximum": 10},
+                        "performance": {"type": "number", "minimum": 1, "maximum": 10},
+                        "battery": {"type": "number", "minimum": 1, "maximum": 10},
+                        "value": {"type": "number", "minimum": 1, "maximum": 10},
+                    },
+                },
+                "specifications": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                        "required": ["label", "value"],
+                    },
+                    "maxItems": 30,
+                },
             },
-            "required": ["verdict", "pros", "cons", "shouldYouBuy"],
+            "required": [
+                "overallScore",
+                "verdict",
+                "pros",
+                "cons",
+                "shouldYouBuy",
+                "componentScores",
+                "specifications",
+            ],
         },
         "blocks": {
             "type": "array",
@@ -186,6 +218,23 @@ def _is_rotatable_error(error):
             "unauthenticated",
             "permission_denied",
             "api key",
+        )
+    )
+
+
+def _is_transient_model_error(error):
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "unavailable",
+            "high demand",
+            "service unavailable",
+            "deadline exceeded",
         )
     )
 
@@ -295,7 +344,7 @@ Review workflow rules:
 - primaryCategory must be exactly one of: {', '.join(ALLOWED_PRIMARY_CATEGORIES)}.
 - Set eligibleForPublication to true only for technology products, games, computer hardware, phones, consumer electronics, or AI products that fit those categories.
 - Set eligibleForPublication to false for movies, television, entertainment-only coverage, mattresses, beauty, kitchen, exercise equipment, household appliances, or anything outside BYTERMINAL's taxonomy, and explain why in rejectionReason.
-- Return reviewSummary with a concise verdict, factual pros, factual cons, and shouldYouBuy.
+- Return reviewSummary with overallScore, verdict, factual pros, factual cons, shouldYouBuy, componentScores and verified specifications.
 - This is an attributed external review summary. Never claim BYTERMINAL tested the product.
 - Attribute measurements, testing observations, scores and conclusions to the source.
 - Never invent a numerical score or convert another publication's score into a BYTERMINAL score.
@@ -347,31 +396,45 @@ def _request_with_rotation(prompt, api_keys):
 
     for key_index in available_indexes:
         api_key = api_keys[key_index]
-        try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=RESPONSE_SCHEMA,
-                    temperature=0.45,
-                ),
-            )
-            if not response.text:
-                raise RuntimeError("Gemini returned an empty response")
-            _current_key_index = key_index
-            return json.loads(response.text)
-        except Exception as error:
-            errors.append(f"key {key_index + 1}: {type(error).__name__}")
-            if not _is_rotatable_error(error):
-                raise
-            _disabled_key_indexes.add(key_index)
-            _current_key_index = (key_index + 1) % total_keys
-            print(
-                f"    Gemini key {key_index + 1} exhausted or unavailable; "
-                "disabled for this run and rotating to the next key"
-            )
+        client = genai.Client(api_key=api_key)
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=RESPONSE_SCHEMA,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                            disable=True
+                        ),
+                        temperature=0.35,
+                    ),
+                )
+                if not response.text:
+                    raise RuntimeError("Gemini returned an empty response")
+                _current_key_index = key_index
+                return json.loads(response.text)
+            except Exception as error:
+                transient = _is_transient_model_error(error)
+                if transient and attempt < 3:
+                    delay = 2 ** attempt
+                    print(
+                        f"    Gemini temporary error on key {key_index + 1} "
+                        f"(attempt {attempt}/3); retrying in {delay}s"
+                    )
+                    time.sleep(delay)
+                    continue
+                errors.append(f"key {key_index + 1}: {type(error).__name__}")
+                if not (_is_rotatable_error(error) or transient):
+                    raise
+                _disabled_key_indexes.add(key_index)
+                _current_key_index = (key_index + 1) % total_keys
+                print(
+                    f"    Gemini key {key_index + 1} exhausted or unavailable; "
+                    "disabled for this run and rotating to the next key"
+                )
+                break
     raise RuntimeError("All Gemini keys failed (" + ", ".join(errors) + ")")
 
 
@@ -408,6 +471,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     result = _request_with_rotation(prompt, api_keys)
 
     rewritten_by_id = {}
+    source_by_id = {block["id"]: block for block in source_blocks}
     valid_ids = {block["id"] for block in source_blocks}
     for item in result.get("blocks", []):
         block_id = item.get("id")
@@ -420,17 +484,20 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         if block_id in rewritten_by_id:
             raise RuntimeError(f"Gemini duplicated block id {block_id}")
         if not text:
-            raise RuntimeError(f"Gemini returned empty text for block id {block_id}")
+            text = source_by_id.get(block_id, {}).get("text", "").strip()
+            print(f"    Gemini returned empty block {block_id}; preserving source text")
         if block_type not in ("paragraph", "heading"):
-            raise RuntimeError(f"Gemini returned invalid type for block id {block_id}")
+            block_type = source_by_id.get(block_id, {}).get("type", "paragraph")
+            print(f"    Gemini returned invalid type for block {block_id}; using {block_type}")
         if block_type == "heading" and level not in ("h2", "h3"):
-            raise RuntimeError(f"Gemini returned invalid heading level for block id {block_id}")
+            level = source_by_id.get(block_id, {}).get("level", "h2")
+            level = level if level in ("h2", "h3") else "h2"
+            print(f"    Gemini returned invalid heading level for block {block_id}; using {level}")
         if block_type == "paragraph" and level != "none":
-            raise RuntimeError(f"Gemini returned a level for paragraph block id {block_id}")
+            level = "none"
         if block_type == "heading" and section_heading:
-            raise RuntimeError(
-                f"Gemini returned sectionHeading on heading block id {block_id}"
-            )
+            print(f"    Ignoring redundant sectionHeading on heading block {block_id}")
+            section_heading = ""
         rewritten_by_id[block_id] = {
             "text": text,
             "type": block_type,
@@ -439,10 +506,26 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         }
 
     missing_ids = valid_ids.difference(rewritten_by_id)
-    if missing_ids:
-        raise RuntimeError(
-            f"Gemini omitted {len(missing_ids)} required article blocks"
-        )
+    for block_id in sorted(missing_ids):
+        source_block = source_by_id[block_id]
+        block_type = source_block["type"]
+        rewritten_by_id[block_id] = {
+            "text": source_block["text"],
+            "type": block_type,
+            "level": source_block.get("level", "h2") if block_type == "heading" else "none",
+            "sectionHeading": "",
+        }
+        print(f"    Gemini omitted block {block_id}; preserving source block")
+
+    inserted_ids = [
+        block_id
+        for block_id in sorted(rewritten_by_id)
+        if rewritten_by_id[block_id]["sectionHeading"]
+    ]
+    for block_id in inserted_ids[5:]:
+        rewritten_by_id[block_id]["sectionHeading"] = ""
+    if len(inserted_ids) > 5:
+        print(f"    Limited inserted headings from {len(inserted_ids)} to 5")
 
     classified_headings = [
         block["text"]
@@ -522,6 +605,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         "trending": bool(result["trending"]),
         "readingTime": int(result["readingTime"]),
     }
+    if published_at:
+        metadata["publishedAt"] = published_at
     if DYNAMIC_PRIMARY_CATEGORY:
         if result.get("eligibleForPublication") is not True:
             reason = str(result.get("rejectionReason", "outside BYTERMINAL taxonomy")).strip()
@@ -540,6 +625,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         if not verdict or not should_you_buy:
             raise RuntimeError("Gemini review response is missing verdict or shouldYouBuy")
         metadata["reviewSummary"] = {
+            "overallScore": float(summary["overallScore"]),
             "verdict": verdict[:2000],
             "pros": [
                 str(item).strip()[:300]
@@ -552,6 +638,21 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
                 if str(item).strip()
             ][:8],
             "shouldYouBuy": should_you_buy[:2000],
+            "componentScores": {
+                key: float(value)
+                for key, value in (summary.get("componentScores") or {}).items()
+                if key in ("design", "display", "performance", "battery", "value")
+            },
+            "specifications": [
+                {
+                    "label": str(item.get("label", "")).strip()[:100],
+                    "value": str(item.get("value", "")).strip()[:500],
+                }
+                for item in summary.get("specifications", [])
+                if str(item.get("label", "")).strip()
+                and str(item.get("value", "")).strip()
+            ][:30],
         }
+        metadata["affiliateDisclosure"] = True
 
     return rewritten_title, rewritten_excerpt, rewritten_blocks, metadata

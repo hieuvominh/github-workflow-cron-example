@@ -1245,6 +1245,33 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     ]
     clean_text = "\n\n".join(text_blocks)
 
+    if len(clean_text) < 200 and downloaded:
+        fallback_text = trafilatura.extract(
+            downloaded,
+            url=url,
+            include_comments=False,
+            include_tables=True,
+            favor_recall=True,
+            output_format="txt",
+        ) or ""
+        fallback_paragraphs = [
+            paragraph.strip()
+            for paragraph in re.split(r"\n{2,}", fallback_text)
+            if paragraph.strip()
+        ]
+        if len(fallback_text.strip()) >= 200:
+            media_blocks = [
+                block
+                for block in blocks
+                if block.get("type") in ("pending_image", "pending_video")
+            ]
+            blocks = media_blocks[:1] + [
+                {"type": "paragraph", "text": paragraph[:10_000]}
+                for paragraph in fallback_paragraphs
+            ]
+            clean_text = fallback_text.strip()
+            print(f"    Used recall-first extraction fallback: {len(clean_text)} characters")
+
     if len(clean_text) < 200:
         print(f"{number:02}. Skipped: could not extract enough content from {url}")
         continue
@@ -1329,8 +1356,16 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         method="POST",
     )
 
-    with urllib.request.urlopen(post_request, timeout=30) as response:
-        result = json.loads(response.read())
+    try:
+        with urllib.request.urlopen(post_request, timeout=30) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        print(
+            f"{number:02}. CMS rejected article with HTTP {error.code}: {url}\n"
+            f"    Response: {response_body[:4000]}"
+        )
+        continue
 
     print(
         f"{number:02}. {title}\n"
