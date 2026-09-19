@@ -57,6 +57,7 @@ LAZY_IMAGE_ATTRIBUTES = (
     "data-hi-res-src",
 )
 IMAGE_SIZE_SUFFIX = re.compile(r"-\d{2,5}(?:[x-]\d{1,4})?$")
+UPLOAD_ID = re.compile(r"\d{6,}")
 LEFTOVER_ENTITY = re.compile(r"&(?:#\d{2,6}|#x[0-9a-fA-F]{2,6}|[a-zA-Z]{2,10});")
 CLASS_TOKENS = re.compile(r"[\s\-_]+")
 NON_EDITORIAL_TOKENS = {
@@ -73,6 +74,36 @@ NON_EDITORIAL_TOKENS = {
     "sponsored",
 }
 NON_EDITORIAL_DEPTH = 3
+RECOVERED_IMAGE_DEPTH = 8
+RECOVERED_IMAGE_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".avif",
+)
+NON_CONTENT_TOKENS = NON_EDITORIAL_TOKENS | {
+    "related",
+    "recommended",
+    "recommendation",
+    "recirculation",
+    "popular",
+    "trending",
+    "newsletter",
+    "subscribe",
+    "widget",
+    "teaser",
+    "card",
+    "fancy",
+    "sidebar",
+    "footer",
+    "nav",
+    "menu",
+    "share",
+    "social",
+    "comments",
+}
 FOLLOW_LINK_HOSTS = (
     "news.google.com",
     "apple.news",
@@ -305,18 +336,9 @@ def non_editorial_identities(document, follow_nodes=()):
         source = image_source(image)
         if not source:
             continue
-        node = image
-        rejected = image in follow_images
-        for _ in range(NON_EDITORIAL_DEPTH + 1):
-            if rejected:
-                break
-            if node is None:
-                break
-            tokens = set(CLASS_TOKENS.split((node.get("class") or "").lower()))
-            if tokens & NON_EDITORIAL_TOKENS:
-                rejected = True
-                break
-            node = node.getparent()
+        rejected = image in follow_images or rejected_container(
+            image, NON_EDITORIAL_TOKENS, NON_EDITORIAL_DEPTH
+        )
         identity = image_identity(source)
         verdicts[identity] = verdicts.get(identity, True) and rejected
     return {identity for identity, rejected in verdicts.items() if rejected}
@@ -421,11 +443,121 @@ def hero_figure_details(document, identity):
     return "", ""
 
 
+def rejected_container(element, tokens, depth):
+    node = element
+    for _ in range(depth + 1):
+        if node is None:
+            return False
+        node_tokens = set(CLASS_TOKENS.split((node.get("class") or "").lower()))
+        if node_tokens & tokens:
+            return True
+        node = node.getparent()
+    return False
+
+
+def upload_id(identity):
+    """The publisher's own upload id, when the file name carries one.
+
+    Engadget publishes the lead photo twice: og:image points at
+    l-intro-1789757717.jpg while the article body holds intro-1789757717.jpg.
+    The stems differ, so image_identity keeps them apart, but the id they
+    share says they are one upload at two sizes.
+    """
+    ids = UPLOAD_ID.findall(identity)
+    return ids[-1] if ids else None
+
+
+def looks_like_image_path(url):
+    path = urllib.parse.urlsplit(url).path.lower()
+    return path.endswith(RECOVERED_IMAGE_EXTENSIONS)
+
+
+def leaves_the_article(image, article_url):
+    """True when the image is a thumbnail linking somewhere else.
+
+    Related-article rails, Google News badges and affiliate banners all wrap
+    their image in an anchor pointing at another page. A lightbox link is the
+    exception publishers use on genuine article photos: it points at the image
+    file itself, so it is not disqualifying.
+    """
+    for link in image.xpath("ancestor::a[@href]"):
+        target = urllib.parse.urljoin(article_url, (link.get("href") or "").strip())
+        if not looks_like_image_path(target):
+            return True
+    return False
+
+
+def recoverable_images(document, article_url, blocked):
+    """In-body images trafilatura discards before it can report them.
+
+    Its OVERALL_DISCARD_XPATH deletes any container whose class contains
+    "embed" or "slide", which is exactly how Engadget wraps every article
+    photo, and its image handler only reads src/data-src*, so a publisher
+    that parks the real URL in data-lazy-src loses the image too. Both are
+    invisible downstream: the block simply never arrives.
+
+    Recovery is deliberately narrow. An image is taken only when it sits in
+    the article container, resolves to a real image file, carries no
+    non-editorial or promotional class within reach, and does not link away
+    from the page. It then still has to anchor onto a paragraph that survived
+    extraction, which is enforced by add_page_media.
+    """
+    scopes = (
+        document.xpath("//article")
+        or document.xpath("//main")
+        or [document]
+    )
+    images = []
+    seen = set(blocked)
+    seen_uploads = {
+        found for identity in seen if (found := upload_id(identity))
+    }
+    for image in scopes[0].xpath(".//img"):
+        source = image_source(image)
+        if not source:
+            continue
+        absolute_source = urllib.parse.urljoin(article_url, source)
+        if not looks_like_image_path(absolute_source):
+            continue
+        identity = image_identity(absolute_source)
+        if identity in seen:
+            continue
+        found = upload_id(identity)
+        if found and found in seen_uploads:
+            continue
+        if rejected_container(image, NON_CONTENT_TOKENS, RECOVERED_IMAGE_DEPTH):
+            continue
+        if leaves_the_article(image, article_url):
+            continue
+        seen.add(identity)
+        if found:
+            seen_uploads.add(found)
+        figures = image.xpath("ancestor::figure[1]")
+        captions = figures[0].xpath(".//figcaption") if figures else []
+        previous_paragraphs = image.xpath("preceding::p[normalize-space()][1]")
+        images.append(
+            {
+                "type": "pending_image",
+                "source": absolute_source,
+                "alt": decoded_text(image.get("alt"))[:500],
+                "caption": decoded_text(
+                    element_text(captions[0]) if captions else ""
+                )[:1_000],
+                "afterText": (
+                    element_text(previous_paragraphs[0])
+                    if previous_paragraphs
+                    else ""
+                ),
+            }
+        )
+    return images
+
+
 def extract_page_media(downloaded, article_url):
     try:
         document = lxml_html.fromstring(downloaded)
     except (TypeError, ValueError, lxml_html.etree.ParserError):
-        return None, [], set(), set()
+        return None, [], [], set(), set()
 
     follow_nodes = follow_widget_nodes(document)
     blocked = non_editorial_identities(document, follow_nodes)
@@ -537,26 +669,51 @@ def extract_page_media(downloaded, article_url):
         if embed_url:
             add_video(link, "youtube", embed_url, element_text(link))
 
-    return hero, videos, blocked, blocked_texts
+    page_images = recoverable_images(
+        document,
+        article_url,
+        blocked | ({image_identity(hero["source"])} if hero else set()),
+    )
+
+    return hero, videos, page_images, blocked, blocked_texts
 
 
-def add_page_media(blocks, hero, videos):
+def anchor_index(blocks, anchor_text):
+    """Where a media block belongs, or None when its anchor is not in the body."""
+    anchor = normalized_text(anchor_text)
+    if not anchor:
+        return None
+    for index in range(len(blocks) - 1, -1, -1):
+        block = blocks[index]
+        if block.get("type") not in ("paragraph", "heading"):
+            continue
+        candidate = normalized_text(block.get("text", ""))
+        if candidate == anchor or candidate in anchor or anchor in candidate:
+            return index + 1
+    return None
+
+
+def add_page_media(blocks, hero, videos, page_images=()):
     if hero:
         blocks.insert(0, hero)
 
     for video in videos:
-        insertion_index = len(blocks)
-        anchor = normalized_text(video.pop("afterText", ""))
-        if anchor:
-            for index in range(len(blocks) - 1, -1, -1):
-                block = blocks[index]
-                if block.get("type") not in ("paragraph", "heading"):
-                    continue
-                candidate = normalized_text(block.get("text", ""))
-                if candidate == anchor or candidate in anchor or anchor in candidate:
-                    insertion_index = index + 1
-                    break
-        blocks.insert(insertion_index, video)
+        insertion_index = anchor_index(blocks, video.pop("afterText", ""))
+        blocks.insert(
+            len(blocks) if insertion_index is None else insertion_index,
+            video,
+        )
+
+    for image in page_images:
+        insertion_index = anchor_index(blocks, image.pop("afterText", ""))
+        if insertion_index is None:
+            continue
+        while (
+            insertion_index < len(blocks)
+            and blocks[insertion_index].get("type") not in ("paragraph", "heading")
+        ):
+            insertion_index += 1
+        blocks.insert(insertion_index, image)
     return blocks
 
 
@@ -966,7 +1123,7 @@ def upload_image(source_url, article_url):
 
 
 def extract_blocks(downloaded, article_url):
-    hero, videos, blocked, blocked_texts = extract_page_media(
+    hero, videos, page_images, blocked, blocked_texts = extract_page_media(
         downloaded, article_url
     )
     extracted_xml = trafilatura.extract(
@@ -1055,7 +1212,14 @@ def extract_blocks(downloaded, article_url):
             walk(child)
 
     walk(main)
-    return add_page_media(blocks, hero, videos)
+    recovered = []
+    for image in page_images:
+        identity = image_identity(image["source"])
+        if identity in seen_image_sources:
+            continue
+        seen_image_sources.add(identity)
+        recovered.append(image)
+    return add_page_media(blocks, hero, videos, recovered)
 
 
 articles = collect_articles()
