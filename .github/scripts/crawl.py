@@ -73,6 +73,13 @@ NON_EDITORIAL_TOKENS = {
     "sponsored",
 }
 NON_EDITORIAL_DEPTH = 3
+FOLLOW_LINK_HOSTS = (
+    "news.google.com",
+    "apple.news",
+    "flipboard.com",
+)
+FOLLOW_CONTAINER_MAX_CHARS = 400
+FOLLOW_TEXT_MIN_CHARS = 20
 ARTICLE_LD_TYPES = {
     "Article",
     "NewsArticle",
@@ -240,7 +247,44 @@ def image_source(element):
     return None
 
 
-def non_editorial_identities(document):
+def follow_widget_nodes(document):
+    """The "follow us on Google News" unit publishers drop mid-article.
+
+    It is a link to a syndication destination wrapping a badge image, with
+    a sibling sentence of call-to-action copy. Both land in the article
+    body, so the link target — which is stable — marks the unit, rather
+    than the obfuscated class name beside it, which is not.
+    """
+    nodes = []
+    for link in document.xpath("//a[@href]"):
+        host = urllib.parse.urlsplit(
+            (link.get("href") or "").lower()
+        ).netloc.split(":", 1)[0]
+        if not any(
+            host == follow_host or host.endswith("." + follow_host)
+            for follow_host in FOLLOW_LINK_HOSTS
+        ):
+            continue
+        nodes.append(link)
+        parent = link.getparent()
+        if (
+            parent is not None
+            and len(element_text(parent)) <= FOLLOW_CONTAINER_MAX_CHARS
+        ):
+            nodes.append(parent)
+    return nodes
+
+
+def non_editorial_texts(nodes):
+    texts = set()
+    for node in nodes:
+        normalized = normalized_text(element_text(node))
+        if len(normalized) >= FOLLOW_TEXT_MIN_CHARS:
+            texts.add(normalized)
+    return texts
+
+
+def non_editorial_identities(document, follow_nodes=()):
     """Images that only ever appear in a byline or promo block.
 
     Publishers using the Future plc template put the writer's portrait in
@@ -254,13 +298,18 @@ def non_editorial_identities(document):
     rail must not be dropped because of that second placement.
     """
     verdicts = {}
+    follow_images = {
+        image for node in follow_nodes for image in node.xpath(".//img")
+    }
     for image in document.xpath("//img"):
         source = image_source(image)
         if not source:
             continue
         node = image
-        rejected = False
+        rejected = image in follow_images
         for _ in range(NON_EDITORIAL_DEPTH + 1):
+            if rejected:
+                break
             if node is None:
                 break
             tokens = set(CLASS_TOKENS.split((node.get("class") or "").lower()))
@@ -376,9 +425,11 @@ def extract_page_media(downloaded, article_url):
     try:
         document = lxml_html.fromstring(downloaded)
     except (TypeError, ValueError, lxml_html.etree.ParserError):
-        return None, [], set()
+        return None, [], set(), set()
 
-    blocked = non_editorial_identities(document)
+    follow_nodes = follow_widget_nodes(document)
+    blocked = non_editorial_identities(document, follow_nodes)
+    blocked_texts = non_editorial_texts(follow_nodes)
     hero = None
     source = hero_source_url(document)
     if source:
@@ -486,7 +537,7 @@ def extract_page_media(downloaded, article_url):
         if embed_url:
             add_video(link, "youtube", embed_url, element_text(link))
 
-    return hero, videos, blocked
+    return hero, videos, blocked, blocked_texts
 
 
 def add_page_media(blocks, hero, videos):
@@ -915,7 +966,9 @@ def upload_image(source_url, article_url):
 
 
 def extract_blocks(downloaded, article_url):
-    hero, videos, blocked = extract_page_media(downloaded, article_url)
+    hero, videos, blocked, blocked_texts = extract_page_media(
+        downloaded, article_url
+    )
     extracted_xml = trafilatura.extract(
         downloaded,
         url=article_url,
@@ -939,11 +992,20 @@ def extract_blocks(downloaded, article_url):
     if hero:
         seen_image_sources.add(image_identity(hero["source"]))
 
+    def is_follow_copy(text):
+        normalized = normalized_text(text)
+        if len(normalized) < FOLLOW_TEXT_MIN_CHARS:
+            return False
+        return any(
+            normalized in blocked_text or blocked_text in normalized
+            for blocked_text in blocked_texts
+        )
+
     def walk(node):
         kind = tag_name(node)
         if kind == "head":
             text = element_text(node)
-            if text:
+            if text and not is_follow_copy(text):
                 level = node.get("rend", "h2")
                 blocks.append(
                     {
@@ -955,6 +1017,8 @@ def extract_blocks(downloaded, article_url):
             return
         if kind in ("p", "quote", "item"):
             text = element_text(node)
+            if text and is_follow_copy(text):
+                text = ""
             if text:
                 prefix = "• " if kind == "item" else ""
                 blocks.append(
