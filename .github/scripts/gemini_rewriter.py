@@ -408,6 +408,7 @@ def _request_with_rotation(prompt, api_keys):
                         automatic_function_calling=types.AutomaticFunctionCallingConfig(
                             disable=True
                         ),
+                        max_output_tokens=65536,
                         temperature=0.35,
                     ),
                 )
@@ -495,6 +496,14 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             print(f"    Gemini returned invalid heading level for block {block_id}; using {level}")
         if block_type == "paragraph" and level != "none":
             level = "none"
+        if block_type == "heading" and len(text) > 500:
+            block_type = "paragraph"
+            level = "none"
+            section_heading = ""
+            print(
+                f"    Gemini classified long prose as heading for block {block_id}; "
+                "using paragraph"
+            )
         if block_type == "heading" and section_heading:
             print(f"    Ignoring redundant sectionHeading on heading block {block_id}")
             section_heading = ""

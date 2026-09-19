@@ -33,7 +33,7 @@ jobs:
           CONTENT_TYPE_LOCK: review
           DYNAMIC_PRIMARY_CATEGORY: "true"
           FEED_URLS: >-
-            ${{ inputs.feed_url || 'https://www.techradar.com/feeds/articletype/review,https://www.theverge.com/rss/reviews/index.xml,https://www.ign.com/rss/v2/articles/feed?categories=review,https://www.notebookcheck.net/RSS-Feed-Notebook-Reviews.8156.0.html' }}
+            ${{ inputs.feed_url || 'https://www.techradar.com/feeds/articletype/review,https://www.theverge.com/rss/reviews/index.xml,https://www.ign.com/rss/v2/articles/feed?categories=review' }}
           SOURCE_VERTICAL_RULES: "www.ign.com=games,ign.com=games"
           PUBLISHED_TODAY_ONLY: "true"
           CONTENT_TIMEZONE: Asia/Bangkok
