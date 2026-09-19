@@ -9,9 +9,14 @@ from google.genai import types
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 MAX_INPUT_CHARS = int(os.environ.get("GEMINI_MAX_INPUT_CHARS", "60000"))
+CONTENT_TYPE_LOCK = os.environ.get("CONTENT_TYPE_LOCK", "").strip()
+DYNAMIC_PRIMARY_CATEGORY = (
+    os.environ.get("DYNAMIC_PRIMARY_CATEGORY", "false").lower() == "true"
+)
 _current_key_index = 0
 _disabled_key_indexes = set()
 
+ALLOWED_PRIMARY_CATEGORIES = ["phones", "ai", "computing", "gadgets", "gaming"]
 ALLOWED_SECONDARY_CATEGORIES = [
     "news",
     "phones",
@@ -50,8 +55,14 @@ RESPONSE_SCHEMA = {
         "excerpt": {"type": "string"},
         "contentType": {
             "type": "string",
-            "enum": ["news", "guide", "opinion"],
+            "enum": ["review", "news", "guide", "opinion"],
         },
+        "primaryCategory": {
+            "type": "string",
+            "enum": ALLOWED_PRIMARY_CATEGORIES,
+        },
+        "eligibleForPublication": {"type": "boolean"},
+        "rejectionReason": {"type": "string"},
         "secondaryCategories": {
             "type": "array",
             "items": {"type": "string", "enum": ALLOWED_SECONDARY_CATEGORIES},
@@ -65,6 +76,24 @@ RESPONSE_SCHEMA = {
         "featured": {"type": "boolean"},
         "trending": {"type": "boolean"},
         "readingTime": {"type": "integer", "minimum": 1, "maximum": 60},
+        "reviewSummary": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string"},
+                "pros": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "cons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "shouldYouBuy": {"type": "string"},
+            },
+            "required": ["verdict", "pros", "cons", "shouldYouBuy"],
+        },
         "blocks": {
             "type": "array",
             "items": {
@@ -258,6 +287,22 @@ def _build_prompt(
     else:
         source_payload["content"] = raw_content
 
+    review_rules = ""
+    if CONTENT_TYPE_LOCK == "review":
+        review_rules = f"""
+Review workflow rules:
+- contentType must be "review".
+- primaryCategory must be exactly one of: {', '.join(ALLOWED_PRIMARY_CATEGORIES)}.
+- Set eligibleForPublication to true only for technology products, games, computer hardware, phones, consumer electronics, or AI products that fit those categories.
+- Set eligibleForPublication to false for movies, television, entertainment-only coverage, mattresses, beauty, kitchen, exercise equipment, household appliances, or anything outside BYTERMINAL's taxonomy, and explain why in rejectionReason.
+- Return reviewSummary with a concise verdict, factual pros, factual cons, and shouldYouBuy.
+- This is an attributed external review summary. Never claim BYTERMINAL tested the product.
+- Attribute measurements, testing observations, scores and conclusions to the source.
+- Never invent a numerical score or convert another publication's score into a BYTERMINAL score.
+"""
+    elif CONTENT_TYPE_LOCK:
+        review_rules = f'\n- contentType must be "{CONTENT_TYPE_LOCK}".\n'
+
     source_payload = json.dumps(source_payload, ensure_ascii=False)
     return f"""You are an editor for BYTERMINAL, an independent technology magazine.
 
@@ -278,6 +323,7 @@ Mandatory rules:
 - The excerpt must be no longer than 300 characters.
 - Do not include Markdown fences or commentary outside the JSON response.
 - The original source URL will be credited separately by the publishing system.
+{review_rules}
 
 Source article data:
 {source_payload}
@@ -462,13 +508,50 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     if not rewritten_title or not rewritten_excerpt:
         raise RuntimeError("Gemini response is missing title or excerpt")
 
+    content_type = str(result.get("contentType", "")).strip()
+    if CONTENT_TYPE_LOCK and content_type != CONTENT_TYPE_LOCK:
+        raise RuntimeError(
+            f"Gemini returned contentType {content_type!r}; expected {CONTENT_TYPE_LOCK!r}"
+        )
+
     metadata = {
-        "contentType": result["contentType"],
+        "contentType": content_type,
         "secondaryCategorySlugs": list(dict.fromkeys(result["secondaryCategories"])),
         "tagSlugs": list(dict.fromkeys(result["tags"])),
         "featured": bool(result["featured"]),
         "trending": bool(result["trending"]),
         "readingTime": int(result["readingTime"]),
     }
+    if DYNAMIC_PRIMARY_CATEGORY:
+        if result.get("eligibleForPublication") is not True:
+            reason = str(result.get("rejectionReason", "outside BYTERMINAL taxonomy")).strip()
+            raise RuntimeError(f"Review is not eligible for publication: {reason}")
+        primary_category = str(result.get("primaryCategory", "")).strip()
+        if primary_category not in ALLOWED_PRIMARY_CATEGORIES:
+            raise RuntimeError(
+                f"Gemini returned invalid primaryCategory {primary_category!r}"
+            )
+        metadata["categorySlug"] = primary_category
+
+    if content_type == "review":
+        summary = result.get("reviewSummary") or {}
+        verdict = str(summary.get("verdict", "")).strip()
+        should_you_buy = str(summary.get("shouldYouBuy", "")).strip()
+        if not verdict or not should_you_buy:
+            raise RuntimeError("Gemini review response is missing verdict or shouldYouBuy")
+        metadata["reviewSummary"] = {
+            "verdict": verdict[:2000],
+            "pros": [
+                str(item).strip()[:300]
+                for item in summary.get("pros", [])
+                if str(item).strip()
+            ][:8],
+            "cons": [
+                str(item).strip()[:300]
+                for item in summary.get("cons", [])
+                if str(item).strip()
+            ][:8],
+            "shouldYouBuy": should_you_buy[:2000],
+        }
 
     return rewritten_title, rewritten_excerpt, rewritten_blocks, metadata
