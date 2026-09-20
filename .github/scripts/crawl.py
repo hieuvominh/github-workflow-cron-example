@@ -121,6 +121,17 @@ NON_CONTENT_TOKENS = NON_EDITORIAL_TOKENS | {
     "social",
     "comments",
 }
+SOURCE_BLOCKED_IMAGE_CLASSES = {
+    "tomshardware.com": {
+        "endorsement-hero-image",
+        "endorsement-top-right",
+    },
+}
+SOURCE_BLOCKED_CONTENT_CLASSES = {
+    "tomshardware.com": {
+        "hawk-deal-widget-hero-main",
+    },
+}
 FOLLOW_LINK_HOSTS = (
     "news.google.com",
     "apple.news",
@@ -361,6 +372,68 @@ def non_editorial_identities(document, follow_nodes=()):
     return {identity for identity, rejected in verdicts.items() if rejected}
 
 
+def source_blocked_image_identities(document, article_url):
+    """Images inside publisher-specific promotional containers."""
+    host = urllib.parse.urlsplit(article_url).netloc.lower().split(":", 1)[0]
+    blocked_classes = next(
+        (
+            classes
+            for rule_host, classes in SOURCE_BLOCKED_IMAGE_CLASSES.items()
+            if host == rule_host or host.endswith("." + rule_host)
+        ),
+        set(),
+    )
+    if not blocked_classes:
+        return set()
+
+    blocked = set()
+    for image in document.xpath("//img"):
+        source = image_source(image)
+        if not source:
+            continue
+        if any(
+            set((node.get("class") or "").lower().split()) & blocked_classes
+            for node in image.iterancestors()
+        ) or set((image.get("class") or "").lower().split()) & blocked_classes:
+            blocked.add(
+                image_identity(urllib.parse.urljoin(article_url, source))
+            )
+    return blocked
+
+
+def remove_source_blocked_content(downloaded, article_url):
+    """Remove publisher-specific affiliate widgets before extraction."""
+    host = urllib.parse.urlsplit(article_url).netloc.lower().split(":", 1)[0]
+    blocked_classes = next(
+        (
+            classes
+            for rule_host, classes in SOURCE_BLOCKED_CONTENT_CLASSES.items()
+            if host == rule_host or host.endswith("." + rule_host)
+        ),
+        set(),
+    )
+    if not blocked_classes:
+        return downloaded
+
+    try:
+        document = lxml_html.fromstring(downloaded)
+    except (TypeError, ValueError, lxml_html.etree.ParserError):
+        return downloaded
+
+    removed = 0
+    for node in document.xpath("//*[@class]"):
+        node_classes = set((node.get("class") or "").lower().split())
+        if not node_classes & blocked_classes:
+            continue
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
+            removed += 1
+    if removed:
+        print(f"    Removed {removed} source affiliate widget(s)")
+    return lxml_html.tostring(document, encoding="unicode", method="html")
+
+
 def image_identity(source_url):
     """Collapse CDN resize variants of one image onto a single key.
 
@@ -578,20 +651,22 @@ def extract_page_media(downloaded, article_url):
 
     follow_nodes = follow_widget_nodes(document)
     blocked = non_editorial_identities(document, follow_nodes)
+    blocked.update(source_blocked_image_identities(document, article_url))
     blocked_texts = non_editorial_texts(follow_nodes)
     hero = None
     source = hero_source_url(document)
     if source:
         absolute_source = urllib.parse.urljoin(article_url, source)
         identity = image_identity(absolute_source)
-        alt, caption = hero_figure_details(document, identity)
-        hero = {
-            "type": "pending_image",
-            "source": absolute_source,
-            "alt": alt,
-            "caption": caption,
-        }
-    else:
+        if identity not in blocked:
+            alt, caption = hero_figure_details(document, identity)
+            hero = {
+                "type": "pending_image",
+                "source": absolute_source,
+                "alt": alt,
+                "caption": caption,
+            }
+    if not hero:
         for figure in document.xpath("//article//figure | //main//figure"):
             images = figure.xpath(".//img")
             figure_source = image_source(images[0]) if images else None
@@ -1308,6 +1383,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
+    downloaded = remove_source_blocked_content(downloaded, url)
     blocks = extract_blocks(downloaded, url)
     text_blocks = [
         block["text"]
@@ -1405,7 +1481,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
 
     article = {
         "sourceUrl": url,
-        "title": title[:180],
+        "title": title,
         "excerpt": excerpt,
         "blocks": uploaded_blocks[:500],
         "categorySlug": CATEGORY_SLUG,

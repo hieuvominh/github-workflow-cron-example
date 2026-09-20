@@ -104,17 +104,9 @@ ALLOWED_AI_TAGS = [
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string", "minLength": 5, "maxLength": 180},
-        "seoTitle": {
-            "type": "string",
-            "minLength": SEO_TITLE_MIN,
-            "maxLength": SEO_TITLE_MAX,
-        },
-        "excerpt": {
-            "type": "string",
-            "minLength": EXCERPT_MIN,
-            "maxLength": EXCERPT_MAX,
-        },
+        "title": {"type": "string"},
+        "seoTitle": {"type": "string"},
+        "excerpt": {"type": "string"},
         "seoDescription": {
             "type": "string",
         },
@@ -519,10 +511,11 @@ Mandatory rules:
 - Use level "h2" or "h3" for headings and "none" for paragraphs.
 - Create a navigable article structure without deleting paragraph content. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
 - Do not add image placeholders.
-- title: accurate editorial headline, normally 45-90 characters and at most 180.
-- seoTitle: natural search title of {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
-- excerpt: one or two complete sentences of {EXCERPT_MIN}-{EXCERPT_MAX} characters for cards and the article dek.
+- title: accurate editorial headline, ideally 45-90 characters.
+- seoTitle: natural search title, ideally {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
+- excerpt: one or two complete sentences, ideally {EXCERPT_MIN}-{EXCERPT_MAX} characters, for cards and the article dek.
 - seoDescription: one complete factual sentence written independently rather than truncating the excerpt. Aim for {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters as an SEO recommendation, but clarity takes priority and text outside that range is allowed.
+- Every character range above is an editorial recommendation only. Never reject, omit or damage useful copy merely to hit a character count.
 - Check every generated field for source-site residue. Never output navigation, advertising, newsletter copy, subscription prompts, author biographies, trust modules, comments, account prompts, related/recommended stories, Most Popular modules, deal/price widgets or gallery controls.
 - Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
 - Source-specific cleanup: {source_rule}
@@ -549,11 +542,11 @@ Block publication only on these two, and put each finding in the matching array:
 
 Everything else belongs in warnings and must not block: thin or generic headings, flat phrasing, an ordering you would have chosen differently, omitted promotional detail, or wording that stays close to the source without lifting a distinctive sentence. Never report a Writer block as a duplicate of a Source block. Report duplication only when the same passage repeats inside the Writer JSON itself.
 
-The required limits are:
+The recommended editorial ranges are:
 - seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
 - excerpt: {EXCERPT_MIN}-{EXCERPT_MAX} characters.
 For seoDescription, {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters is only a recommendation, not a publishing limit. A longer or shorter non-empty description must not block publication; record any length concern only in warnings.
-The publishing system measures the required lengths itself, so record any length concern in warnings rather than in a blocking array.
+All character ranges are recommendations. Never put a length concern in a blocking array and never set readyToPublish false solely because of length.
 
 Set readyToPublish true when both remainingBoilerplate and unsupportedClaims are empty, and set boilerplateDetected to whether remainingBoilerplate is non-empty. Do not rewrite the article. Return only the validation JSON.
 
@@ -579,22 +572,12 @@ Validator findings:
 
 
 def _writer_contract_issues(result):
-    checks = (
-        ("title", 5, 180),
-        ("seoTitle", SEO_TITLE_MIN, SEO_TITLE_MAX),
-        ("excerpt", EXCERPT_MIN, EXCERPT_MAX),
-    )
-    issues = []
-    for field_name, minimum, maximum in checks:
-        value = str(result.get(field_name, "")).strip()
-        if not minimum <= len(value) <= maximum:
-            issues.append(
-                f"{field_name} must be {minimum}-{maximum} characters; "
-                f"received {len(value)}"
-            )
-    if not str(result.get("seoDescription", "")).strip():
-        issues.append("seoDescription must not be empty")
-    return issues
+    required_fields = ("title", "seoTitle", "excerpt", "seoDescription")
+    return [
+        f"{field_name} must not be empty"
+        for field_name in required_fields
+        if not str(result.get(field_name, "")).strip()
+    ]
 
 
 BLOCK_COMPARISON_NOISE = re.compile(
@@ -747,7 +730,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             "fieldLimitIssues": contract_issues,
             "warnings": [],
         }
-        print("    Gemini draft missed field limits; running one repair")
+        print("    Gemini draft omitted a required field; running one repair")
     else:
         validation = _request_with_rotation(
             _build_validation_prompt(validation_source, result),
@@ -766,7 +749,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         repaired_contract_issues = _writer_contract_issues(result)
         if repaired_contract_issues:
             raise RuntimeError(
-                "Gemini still violated field limits after repair: "
+                "Gemini still omitted a required field after repair: "
                 + "; ".join(repaired_contract_issues)
             )
         validation = _request_with_rotation(
@@ -911,22 +894,19 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         else:
             rewritten_blocks.append(block)
 
-    rewritten_title = str(result.get("title", "")).strip()[:180]
+    rewritten_title = str(result.get("title", "")).strip()
     seo_title = str(result.get("seoTitle", "")).strip()
     rewritten_excerpt = str(result.get("excerpt", "")).strip()
     seo_description = str(result.get("seoDescription", "")).strip()
-    field_lengths = {
-        "seoTitle": (seo_title, SEO_TITLE_MIN, SEO_TITLE_MAX),
-        "excerpt": (rewritten_excerpt, EXCERPT_MIN, EXCERPT_MAX),
+    required_values = {
+        "title": rewritten_title,
+        "seoTitle": seo_title,
+        "excerpt": rewritten_excerpt,
+        "seoDescription": seo_description,
     }
-    if not rewritten_title or not seo_description:
-        raise RuntimeError("Gemini response is missing title or seoDescription")
-    for field_name, (value, minimum, maximum) in field_lengths.items():
-        if not minimum <= len(value) <= maximum:
-            raise RuntimeError(
-                f"Gemini {field_name} must be {minimum}-{maximum} characters; "
-                f"received {len(value)}"
-            )
+    missing_fields = [name for name, value in required_values.items() if not value]
+    if missing_fields:
+        raise RuntimeError("Gemini response is missing: " + ", ".join(missing_fields))
 
     content_type = str(result.get("contentType", "")).strip()
     if CONTENT_TYPE_LOCK and content_type != CONTENT_TYPE_LOCK:
