@@ -10,10 +10,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from io import BytesIO
-from zoneinfo import ZoneInfo
 
 import trafilatura
 import trafilatura.settings
@@ -41,8 +40,9 @@ INGEST_SECRET = os.environ["INGEST_SECRET"]
 MEDIA_REPO = os.environ["MEDIA_REPO"]
 MEDIA_BRANCH = os.environ.get("MEDIA_BRANCH", "main")
 MEDIA_TOKEN = os.environ["MEDIA_TOKEN"]
-PUBLISHED_TODAY_ONLY = os.environ.get("PUBLISHED_TODAY_ONLY", "false").lower() == "true"
-CONTENT_TIMEZONE = os.environ.get("CONTENT_TIMEZONE", "Asia/Bangkok")
+PUBLISHED_WITHIN_HOURS = max(
+    0, int(os.environ.get("PUBLISHED_WITHIN_HOURS", "0"))
+)
 FEED_MAX_PAGES = max(1, int(os.environ.get("FEED_MAX_PAGES", "1")))
 MAX_ARTICLES = max(0, int(os.environ.get("MAX_ARTICLES", "10")))
 RAW_SOURCE_VERTICAL_RULES = os.environ.get("SOURCE_VERTICAL_RULES", "").strip()
@@ -979,7 +979,8 @@ def fetch_feed_root(page_url):
 
 
 def collect_articles():
-    target_date = datetime.now(ZoneInfo(CONTENT_TIMEZONE)).date()
+    window_end = datetime.now(timezone.utc)
+    window_start = window_end - timedelta(hours=PUBLISHED_WITHIN_HOURS)
     articles = []
     seen_urls = set()
 
@@ -1015,15 +1016,14 @@ def collect_articles():
                     print(f"Skipped promotional feed item ({promotion}): {title} — {url}")
                     continue
 
-                if PUBLISHED_TODAY_ONLY:
+                if PUBLISHED_WITHIN_HOURS:
                     if not published_at:
                         print(f"Skipped undated feed item: {url}")
                         continue
-                    local_date = published_at.astimezone(ZoneInfo(CONTENT_TIMEZONE)).date()
-                    if local_date < target_date:
+                    if published_at < window_start:
                         reached_older_article = True
                         continue
-                    if local_date > target_date:
+                    if published_at > window_end:
                         continue
 
                 seen_urls.add(url)
@@ -1036,10 +1036,14 @@ def collect_articles():
                 )
                 source_article_count += 1
 
-            if not PUBLISHED_TODAY_ONLY or reached_older_article:
+            if not PUBLISHED_WITHIN_HOURS or reached_older_article:
                 break
 
-        scope = f" for {target_date.isoformat()}" if PUBLISHED_TODAY_ONLY else ""
+        scope = (
+            f" from the last {PUBLISHED_WITHIN_HOURS} hours"
+            if PUBLISHED_WITHIN_HOURS
+            else ""
+        )
         print(
             f"    Found {source_article_count} eligible article(s){scope}; "
             f"scanned {scanned_item_count} item(s) across {pages_read} page(s)"
@@ -1367,7 +1371,11 @@ def extract_blocks(downloaded, article_url):
 
 articles = collect_articles()
 if not articles:
-    scope = f" for today in {CONTENT_TIMEZONE}" if PUBLISHED_TODAY_ONLY else ""
+    scope = (
+        f" from the last {PUBLISHED_WITHIN_HOURS} hours"
+        if PUBLISHED_WITHIN_HOURS
+        else ""
+    )
     print(f"No RSS/Atom articles found{scope}")
     raise SystemExit(0)
 

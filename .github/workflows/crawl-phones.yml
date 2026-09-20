@@ -31,8 +31,7 @@ jobs:
           CATEGORY_SLUG: phones
           FEED_URLS: >-
             ${{ inputs.feed_url || 'https://www.theverge.com/rss/phones/index.xml,https://www.tomsguide.com/feeds/tag/phones' }}
-          PUBLISHED_TODAY_ONLY: "true"
-          CONTENT_TIMEZONE: Asia/Bangkok
+          PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}

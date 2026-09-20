@@ -31,8 +31,7 @@ jobs:
           CATEGORY_SLUG: gadgets
           FEED_URLS: >-
             ${{ inputs.feed_url || 'https://techcrunch.com/category/gadgets/feed/,https://www.theverge.com/rss/gadgets/index.xml,https://www.engadget.com/rss.xml' }}
-          PUBLISHED_TODAY_ONLY: "true"
-          CONTENT_TIMEZONE: Asia/Bangkok
+          PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
