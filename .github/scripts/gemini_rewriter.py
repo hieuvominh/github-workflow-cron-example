@@ -17,6 +17,58 @@ DYNAMIC_PRIMARY_CATEGORY = (
 _current_key_index = 0
 _disabled_key_indexes = set()
 
+SEO_TITLE_MIN = 20
+SEO_TITLE_MAX = 65
+EXCERPT_MIN = 80
+EXCERPT_MAX = 320
+SEO_DESCRIPTION_MIN = 120
+SEO_DESCRIPTION_MAX = 165
+
+COMMON_BOILERPLATE_PATTERNS = (
+    r"\bsign up for (?:breaking|our|the)\b",
+    r"\bwhy you can trust\b",
+    r"\bjoin the conversation\b",
+    r"\babout the author\b",
+    r"\btoday(?:'|’)?s best deals\b",
+    r"\bsubscribe (?:to|for)\b",
+    r"\bfollow us on google news\b",
+    r"^\s*most popular\s*$",
+    r"^\s*related stor(?:y|ies)\s*$",
+    r"^\s*advertisement\s*$",
+)
+
+SOURCE_BOILERPLATE_PATTERNS = {
+    "techradar.com": (
+        r"\bwhy you can trust techradar\b",
+        r"\bsign up for breaking news\b",
+        r"\btoday(?:'|’)?s best deals\b",
+    ),
+    "tomshardware.com": (
+        r"\bwhy you can trust tom(?:'|’)?s hardware\b",
+        r"\bjoin the discussion\b",
+    ),
+    "theverge.com": (
+        r"\bthe verge homepage\b",
+        r"^\s*most popular\s*$",
+        r"^\s*(?:view |see all )?comments?\s*$",
+    ),
+    "engadget.com": (
+        r"\bsubscribe to engadget\b",
+        r"\brecommended stor(?:y|ies)\b",
+    ),
+}
+
+CATEGORY_DIRECTIONS = {
+    "phones": "Cover phones, mobile operating systems, apps and accessories. Lead with practical user impact; preserve models, regions, prices, availability and limitations. Choose news, guide or opinion from the source's real purpose. The primary category is phones.",
+    "computing": "Cover PCs, processors, graphics, storage, networking, cloud, data centers and enterprise software. Preserve benchmarks, configurations and caveats and attribute vendor claims. The primary category is computing.",
+    "gadgets": "Cover consumer electronics, wearables, smart-home devices and accessories. Focus on real-world use, compatibility, price, availability and trade-offs. The primary category is gadgets.",
+    "gaming": "Cover games, consoles, handhelds, PC gaming hardware and industry developments. Preserve platform, release, pricing and performance details. The primary category is gaming.",
+    "ai": "Cover artificial intelligence with a neutral, technically literate voice. Explain capabilities, limitations, business impact, privacy and safety. Distinguish claims, research and independent evidence. The primary category is ai.",
+    "guides": "Create a practical technology guide with an explicit outcome, prerequisites, ordered actions and caveats. Preserve exact commands and settings only when supported. Never invent a missing step. The content type is guide.",
+    "news": "Use a sharp, neutral newsroom voice. Lead with what happened and why it matters. Preserve dates, entities, confirmed figures, attribution and uncertainty.",
+    "reviews": "Prepare an attributed external technology review summary. Never imply BYTERMINAL tested the product. Preserve only source-supported scores, pros, cons, verdict, advice and specifications.",
+}
+
 ALLOWED_PRIMARY_CATEGORIES = ["phones", "ai", "computing", "gadgets", "gaming"]
 ALLOWED_SECONDARY_CATEGORIES = [
     "news",
@@ -53,7 +105,9 @@ RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "title": {"type": "string"},
+        "seoTitle": {"type": "string"},
         "excerpt": {"type": "string"},
+        "seoDescription": {"type": "string"},
         "contentType": {
             "type": "string",
             "enum": ["review", "news", "guide", "opinion"],
@@ -149,7 +203,9 @@ RESPONSE_SCHEMA = {
     },
     "required": [
         "title",
+        "seoTitle",
         "excerpt",
+        "seoDescription",
         "contentType",
         "secondaryCategories",
         "tags",
@@ -157,6 +213,36 @@ RESPONSE_SCHEMA = {
         "trending",
         "readingTime",
         "blocks",
+    ],
+}
+
+VALIDATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "readyToPublish": {"type": "boolean"},
+        "boilerplateDetected": {"type": "boolean"},
+        "remainingBoilerplate": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 20,
+        },
+        "unsupportedClaims": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 20,
+        },
+        "warnings": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 10,
+        },
+    },
+    "required": [
+        "readyToPublish",
+        "boilerplateDetected",
+        "remainingBoilerplate",
+        "unsupportedClaims",
+        "warnings",
     ],
 }
 
@@ -192,15 +278,68 @@ def load_api_keys():
 
 
 def load_category_prompt(category_slug):
-    prompt_path = Path(
-        os.environ.get(
-            "CATEGORY_PROMPT_FILE",
-            f".github/prompts/{category_slug}.txt",
-        )
-    )
+    explicit_prompt = os.environ.get("CATEGORY_PROMPT_FILE", "").strip()
+    if explicit_prompt:
+        prompt_path = Path(explicit_prompt)
+        if not prompt_path.exists():
+            raise RuntimeError(f"Category prompt not found: {prompt_path}")
+        return prompt_path.read_text(encoding="utf-8").strip()
+    if category_slug in CATEGORY_DIRECTIONS:
+        return CATEGORY_DIRECTIONS[category_slug]
+    prompt_path = Path(f".github/prompts/{category_slug}.txt")
     if not prompt_path.exists():
         raise RuntimeError(f"Category prompt not found: {prompt_path}")
     return prompt_path.read_text(encoding="utf-8").strip()
+
+
+def _source_host(source_url):
+    from urllib.parse import urlsplit
+
+    return urlsplit(source_url).hostname.lower().removeprefix("www.")
+
+
+def _boilerplate_patterns(source_url):
+    patterns = list(COMMON_BOILERPLATE_PATTERNS)
+    host = _source_host(source_url)
+    for domain, domain_patterns in SOURCE_BOILERPLATE_PATTERNS.items():
+        if host == domain or host.endswith("." + domain):
+            patterns.extend(domain_patterns)
+    return tuple(re.compile(pattern, re.IGNORECASE) for pattern in patterns)
+
+
+def sanitize_source_blocks(blocks, source_url):
+    """Layer-one cleanup before any source text is sent to Gemini."""
+    patterns = _boilerplate_patterns(source_url)
+    cleaned = []
+    removed = []
+    for block in blocks:
+        if block.get("type") not in ("paragraph", "heading"):
+            cleaned.append(block)
+            continue
+        text = re.sub(r"\s+", " ", str(block.get("text", ""))).strip()
+        if not text:
+            continue
+        matched = next((pattern.pattern for pattern in patterns if pattern.search(text)), None)
+        if matched:
+            removed.append(text[:180])
+            continue
+        cleaned.append({**block, "text": text})
+    if removed:
+        print(f"    Pre-Gemini cleanup removed {len(removed)} boilerplate block(s)")
+    return cleaned
+
+
+def _source_specific_instruction(source_url):
+    host = _source_host(source_url)
+    if host.endswith("techradar.com"):
+        return "Remove TechRadar trust copy, breaking-news signup copy, price widgets and Today's best deals."
+    if host.endswith("tomshardware.com"):
+        return "Remove Tom's Hardware trust copy, deal widgets, comments and newsletter modules."
+    if host.endswith("theverge.com"):
+        return "Remove The Verge Most Popular and related-story rails, newsletters, comments and account prompts."
+    if host.endswith("engadget.com"):
+        return "Remove Engadget newsletters, commerce recommendations, related stories and author footer modules."
+    return "Remove all source-site navigation, promotions, subscriptions, related content and interface copy."
 
 
 def _is_rotatable_error(error):
@@ -353,14 +492,16 @@ Review workflow rules:
         review_rules = f'\n- contentType must be "{CONTENT_TYPE_LOCK}".\n'
 
     source_payload = json.dumps(source_payload, ensure_ascii=False)
-    return f"""You are an editor for BYTERMINAL, an independent technology magazine.
+    source_rule = _source_specific_instruction(source_url)
+    return f"""You are the editorial production engine for BYTERMINAL, an independent English-language technology magazine.
 
 Category-specific editorial direction:
 {category_prompt}
 
 Mandatory rules:
-- Produce an original, concise article, not a sentence-by-sentence paraphrase.
-- Preserve factual meaning. Never invent specifications, quotes, tests, or conclusions.
+- Produce an original, coherent article, not a sentence-by-sentence paraphrase.
+- Preserve verifiable names, dates, prices, specifications, qualifications and attributed conclusions.
+- Never invent facts, first-hand testing, measurements, quotes, images, links or source details.
 - Do not copy distinctive wording from the source.
 - Keep every returned block id exactly equal to an input block id.
 - Preserve the input block order and return one rewritten text value per input block.
@@ -368,10 +509,16 @@ Mandatory rules:
 - Use level "h2" or "h3" for headings and "none" for paragraphs.
 - Create a navigable article structure without deleting paragraph content. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
 - Do not add image placeholders.
-- The title must be accurate and no longer than 180 characters.
-- The excerpt must be no longer than 300 characters.
+- title: accurate editorial headline, normally 45-90 characters and at most 180.
+- seoTitle: natural search title of {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
+- excerpt: one or two complete sentences of {EXCERPT_MIN}-{EXCERPT_MAX} characters for cards and the article dek.
+- seoDescription: one complete factual sentence of {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters, written independently rather than truncating the excerpt.
+- Check every generated field for source-site residue. Never output navigation, advertising, newsletter copy, subscription prompts, author biographies, trust modules, comments, account prompts, related/recommended stories, Most Popular modules, deal/price widgets or gallery controls.
+- Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
+- Source-specific cleanup: {source_rule}
 - Do not include Markdown fences or commentary outside the JSON response.
-- The original source URL will be credited separately by the publishing system.
+- The original source URL is controlled and credited separately by the publishing system. Do not place it in article blocks.
+- Do not generate sourcePublisher, sourcePublishedAt, slug, canonical URL or BYTERMINAL publication time.
 {review_rules}
 
 Source article data:
@@ -379,7 +526,40 @@ Source article data:
 """
 
 
-def _request_with_rotation(prompt, api_keys):
+def _build_validation_prompt(source_payload, writer_result):
+    return f"""Act as an independent BYTERMINAL publishing gate.
+
+Compare the Writer JSON with the supplied source context. Reject unsupported claims, changed numbers or dates, invented first-hand testing, missing material context, source-site boilerplate, duplicated sections, or SEO fields outside their limits.
+
+The required limits are:
+- seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
+- excerpt: {EXCERPT_MIN}-{EXCERPT_MAX} characters.
+- seoDescription: {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters and not a simple excerpt truncation.
+
+Set readyToPublish true only when boilerplateDetected is false and both remainingBoilerplate and unsupportedClaims are empty. Do not rewrite the article. Return only the validation JSON.
+
+Source context:
+{json.dumps(source_payload, ensure_ascii=False)}
+
+Writer JSON:
+{json.dumps(writer_result, ensure_ascii=False)}
+"""
+
+
+def _build_repair_prompt(writer_prompt, writer_result, validation):
+    return f"""{writer_prompt}
+
+The first draft failed an independent publishing check. Return a complete corrected JSON object, fixing every issue without adding unsupported facts.
+
+First draft:
+{json.dumps(writer_result, ensure_ascii=False)}
+
+Validator findings:
+{json.dumps(validation, ensure_ascii=False)}
+"""
+
+
+def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, temperature=0.35):
     global _current_key_index
 
     errors = []
@@ -404,12 +584,12 @@ def _request_with_rotation(prompt, api_keys):
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        response_schema=RESPONSE_SCHEMA,
+                        response_schema=response_schema,
                         automatic_function_calling=types.AutomaticFunctionCallingConfig(
                             disable=True
                         ),
                         max_output_tokens=65536,
-                        temperature=0.35,
+                        temperature=temperature,
                     ),
                 )
                 if not response.text:
@@ -442,6 +622,7 @@ def _request_with_rotation(prompt, api_keys):
 def rewrite_article(title, source_url, blocks, category_slug, published_at=None):
     api_keys = load_api_keys()
     category_prompt = load_category_prompt(category_slug)
+    blocks = sanitize_source_blocks(blocks, source_url)
     source_blocks = _source_blocks(blocks)
     if not source_blocks:
         raise RuntimeError("No text blocks available for Gemini")
@@ -470,6 +651,48 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         raw_content,
     )
     result = _request_with_rotation(prompt, api_keys)
+
+    validation_source = {
+        "sourceTitle": title,
+        "sourceUrl": source_url,
+        "categorySlug": category_slug,
+        "blocks": source_blocks,
+    }
+    validation = _request_with_rotation(
+        _build_validation_prompt(validation_source, result),
+        api_keys,
+        response_schema=VALIDATION_SCHEMA,
+        temperature=0.0,
+    )
+    validation_failed = (
+        validation.get("readyToPublish") is not True
+        or validation.get("boilerplateDetected") is not False
+        or bool(validation.get("remainingBoilerplate"))
+        or bool(validation.get("unsupportedClaims"))
+    )
+    if validation_failed:
+        print("    Gemini validator rejected the first draft; running one repair")
+        result = _request_with_rotation(
+            _build_repair_prompt(prompt, result, validation),
+            api_keys,
+        )
+        validation = _request_with_rotation(
+            _build_validation_prompt(validation_source, result),
+            api_keys,
+            response_schema=VALIDATION_SCHEMA,
+            temperature=0.0,
+        )
+        validation_failed = (
+            validation.get("readyToPublish") is not True
+            or validation.get("boilerplateDetected") is not False
+            or bool(validation.get("remainingBoilerplate"))
+            or bool(validation.get("unsupportedClaims"))
+        )
+    if validation_failed:
+        raise RuntimeError(
+            "Gemini validation failed after repair: "
+            + json.dumps(validation, ensure_ascii=False)
+        )
 
     rewritten_by_id = {}
     source_by_id = {block["id"]: block for block in source_blocks}
@@ -596,9 +819,26 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             rewritten_blocks.append(block)
 
     rewritten_title = str(result.get("title", "")).strip()[:180]
-    rewritten_excerpt = str(result.get("excerpt", "")).strip()[:300]
-    if not rewritten_title or not rewritten_excerpt:
-        raise RuntimeError("Gemini response is missing title or excerpt")
+    seo_title = str(result.get("seoTitle", "")).strip()
+    rewritten_excerpt = str(result.get("excerpt", "")).strip()
+    seo_description = str(result.get("seoDescription", "")).strip()
+    field_lengths = {
+        "seoTitle": (seo_title, SEO_TITLE_MIN, SEO_TITLE_MAX),
+        "excerpt": (rewritten_excerpt, EXCERPT_MIN, EXCERPT_MAX),
+        "seoDescription": (
+            seo_description,
+            SEO_DESCRIPTION_MIN,
+            SEO_DESCRIPTION_MAX,
+        ),
+    }
+    if not rewritten_title:
+        raise RuntimeError("Gemini response is missing title")
+    for field_name, (value, minimum, maximum) in field_lengths.items():
+        if not minimum <= len(value) <= maximum:
+            raise RuntimeError(
+                f"Gemini {field_name} must be {minimum}-{maximum} characters; "
+                f"received {len(value)}"
+            )
 
     content_type = str(result.get("contentType", "")).strip()
     if CONTENT_TYPE_LOCK and content_type != CONTENT_TYPE_LOCK:
@@ -607,15 +847,26 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         )
 
     metadata = {
+        "seoTitle": seo_title,
+        "seoDescription": seo_description,
         "contentType": content_type,
         "secondaryCategorySlugs": list(dict.fromkeys(result["secondaryCategories"])),
         "tagSlugs": list(dict.fromkeys(result["tags"])),
         "featured": bool(result["featured"]),
         "trending": bool(result["trending"]),
         "readingTime": int(result["readingTime"]),
+        "qualityAssessment": {
+            "readyToPublish": True,
+            "boilerplateDetected": False,
+            "remainingBoilerplate": [],
+            "unsupportedClaims": [],
+            "warnings": [
+                str(item).strip()[:500]
+                for item in validation.get("warnings", [])
+                if str(item).strip()
+            ][:10],
+        },
     }
-    if published_at:
-        metadata["publishedAt"] = published_at
     if DYNAMIC_PRIMARY_CATEGORY:
         if result.get("eligibleForPublication") is not True:
             reason = str(result.get("rejectionReason", "outside BYTERMINAL taxonomy")).strip()

@@ -1329,15 +1329,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             )
             image_count += 1
 
-    uploaded_blocks.append(
-        {
-            "type": "paragraph",
-            "text": f"Original source: {url}",
-        }
-    )
-
     article = {
-        "externalSourceID": url,
+        "sourceUrl": url,
         "title": title[:180],
         "excerpt": excerpt,
         "blocks": uploaded_blocks[:500],

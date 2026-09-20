@@ -29,9 +29,14 @@ separate keys with commas. `api_keys.txt` is ignored by Git.
 
 To use a different private file path, set `GEMINI_API_KEYS_FILE`.
 
-## Category prompts
+## Editorial prompts and validation
 
-Prompts are stored in `.github/prompts/`:
+The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It applies two layers:
+deterministic source cleanup, followed by a Gemini writer and an independent Gemini validator. A
+failed draft receives one repair attempt and is never published if it fails validation again.
+
+Built-in category directions are defined beside that shared policy. Files in `.github/prompts/` are
+kept as optional custom prompt overrides:
 
 - `news.txt`
 - `phones.txt`
@@ -41,7 +46,11 @@ Prompts are stored in `.github/prompts/`:
 - `gaming.txt`
 - `guides.txt`
 
-Edit a prompt file to change only that category's tone and editorial focus.
+Set `CATEGORY_PROMPT_FILE` to use one of these files instead of the built-in direction.
+
+Gemini creates the display title, SEO title, excerpt, SEO description, taxonomy, article blocks and
+review fields. The crawler owns the source URL; BYTERMINAL derives the publisher, canonical URL,
+slug and publication time. The source publication date is context only and is not stored.
 
 ## Repository variables
 
