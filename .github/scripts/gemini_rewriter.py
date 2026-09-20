@@ -117,8 +117,6 @@ RESPONSE_SCHEMA = {
         },
         "seoDescription": {
             "type": "string",
-            "minLength": SEO_DESCRIPTION_MIN,
-            "maxLength": SEO_DESCRIPTION_MAX,
         },
         "contentType": {
             "type": "string",
@@ -524,7 +522,7 @@ Mandatory rules:
 - title: accurate editorial headline, normally 45-90 characters and at most 180.
 - seoTitle: natural search title of {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
 - excerpt: one or two complete sentences of {EXCERPT_MIN}-{EXCERPT_MAX} characters for cards and the article dek.
-- seoDescription: one complete factual sentence of {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters, written independently rather than truncating the excerpt.
+- seoDescription: one complete factual sentence written independently rather than truncating the excerpt. Aim for {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters as an SEO recommendation, but clarity takes priority and text outside that range is allowed.
 - Check every generated field for source-site residue. Never output navigation, advertising, newsletter copy, subscription prompts, author biographies, trust modules, comments, account prompts, related/recommended stories, Most Popular modules, deal/price widgets or gallery controls.
 - Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
 - Source-specific cleanup: {source_rule}
@@ -554,8 +552,8 @@ Everything else belongs in warnings and must not block: thin or generic headings
 The required limits are:
 - seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
 - excerpt: {EXCERPT_MIN}-{EXCERPT_MAX} characters.
-- seoDescription: {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters and not a simple excerpt truncation.
-The publishing system measures these lengths itself, so record any length concern in warnings rather than in a blocking array.
+For seoDescription, {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters is only a recommendation, not a publishing limit. A longer or shorter non-empty description must not block publication; record any length concern only in warnings.
+The publishing system measures the required lengths itself, so record any length concern in warnings rather than in a blocking array.
 
 Set readyToPublish true when both remainingBoilerplate and unsupportedClaims are empty, and set boilerplateDetected to whether remainingBoilerplate is non-empty. Do not rewrite the article. Return only the validation JSON.
 
@@ -585,7 +583,6 @@ def _writer_contract_issues(result):
         ("title", 5, 180),
         ("seoTitle", SEO_TITLE_MIN, SEO_TITLE_MAX),
         ("excerpt", EXCERPT_MIN, EXCERPT_MAX),
-        ("seoDescription", SEO_DESCRIPTION_MIN, SEO_DESCRIPTION_MAX),
     )
     issues = []
     for field_name, minimum, maximum in checks:
@@ -595,6 +592,8 @@ def _writer_contract_issues(result):
                 f"{field_name} must be {minimum}-{maximum} characters; "
                 f"received {len(value)}"
             )
+    if not str(result.get("seoDescription", "")).strip():
+        issues.append("seoDescription must not be empty")
     return issues
 
 
@@ -919,14 +918,9 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     field_lengths = {
         "seoTitle": (seo_title, SEO_TITLE_MIN, SEO_TITLE_MAX),
         "excerpt": (rewritten_excerpt, EXCERPT_MIN, EXCERPT_MAX),
-        "seoDescription": (
-            seo_description,
-            SEO_DESCRIPTION_MIN,
-            SEO_DESCRIPTION_MAX,
-        ),
     }
-    if not rewritten_title:
-        raise RuntimeError("Gemini response is missing title")
+    if not rewritten_title or not seo_description:
+        raise RuntimeError("Gemini response is missing title or seoDescription")
     for field_name, (value, minimum, maximum) in field_lengths.items():
         if not minimum <= len(value) <= maximum:
             raise RuntimeError(
