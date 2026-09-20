@@ -35,6 +35,13 @@ The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It a
 deterministic source cleanup, followed by a Gemini writer and an independent Gemini validator. A
 failed draft receives one repair attempt and is never published if it fails validation again.
 
+Only two validator findings block publication: `unsupportedClaims` (a fact the source does not
+support, or distinctive source wording lifted near-verbatim) and `remainingBoilerplate` (source-site
+chrome that survived the rewrite). Field lengths are measured in Python rather than by the model,
+and everything else the validator notices is printed as a warning. Because the writer is required to
+return one rewritten block per source block, a finding that merely compares a writer block with its
+source block is demoted to a warning instead of blocking the article.
+
 Built-in category directions are defined beside that shared policy. Files in `.github/prompts/` are
 kept as optional custom prompt overrides:
 

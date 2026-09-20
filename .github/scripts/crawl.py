@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +16,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import trafilatura
+import trafilatura.settings
 from lxml import etree as lxml_etree
 from lxml import html as lxml_html
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -49,6 +51,21 @@ IMAGE_MAX_HEIGHT = max(320, int(os.environ.get("IMAGE_MAX_HEIGHT", "1600")))
 IMAGE_WEBP_QUALITY = min(95, max(60, int(os.environ.get("IMAGE_WEBP_QUALITY", "84"))))
 IMAGE_DOWNLOAD_MAX_BYTES = 30_000_000
 IMAGE_UPLOAD_MAX_BYTES = 15_000_000
+ARTICLE_DOWNLOAD_MAX_BYTES = 20_000_000
+ARTICLE_FETCH_ATTEMPTS = 3
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+try:
+    import certifi
+
+    ARTICLE_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    ARTICLE_SSL_CONTEXT = ssl.create_default_context()
+ARTICLE_FETCH_CONFIG = trafilatura.settings.use_config()
+ARTICLE_FETCH_CONFIG.set("DEFAULT", "USER_AGENTS", BROWSER_USER_AGENT)
+ARTICLE_FETCH_CONFIG.set("DEFAULT", "SLEEP_TIME", "0")
 LAZY_IMAGE_ATTRIBUTES = (
     "src",
     "data-src",
@@ -1122,6 +1139,57 @@ def upload_image(source_url, article_url):
     )
 
 
+def fetch_article_html_direct(article_url):
+    request = urllib.request.Request(
+        article_url,
+        headers={
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=30, context=ARTICLE_SSL_CONTEXT
+        ) as response:
+            payload = response.read(ARTICLE_DOWNLOAD_MAX_BYTES)
+            charset = response.headers.get_content_charset() or "utf-8"
+    except Exception as error:
+        print(f"    Direct fetch failed: {error}")
+        return None
+    return payload.decode(charset, errors="replace")
+
+
+def fetch_article_html(article_url):
+    """Download an article, reporting why a download failed.
+
+    trafilatura.fetch_url collapses every failure into None, which used to be
+    reported as an extraction problem. Reading the response directly keeps the
+    HTTP status in the log so a blocked source is recognisable.
+    """
+    last_reason = "no response"
+    for attempt in range(1, ARTICLE_FETCH_ATTEMPTS + 1):
+        try:
+            response = trafilatura.fetch_response(
+                article_url, decode=True, config=ARTICLE_FETCH_CONFIG
+            )
+        except Exception as error:
+            last_reason = f"{type(error).__name__}: {error}"
+            response = None
+        if response is not None:
+            if 200 <= response.status < 300 and response.html:
+                return response.html
+            last_reason = f"HTTP {response.status}"
+            if 400 <= response.status < 500 and response.status != 429:
+                break
+        if attempt < ARTICLE_FETCH_ATTEMPTS:
+            time.sleep(2 * attempt)
+    print(f"    Download failed ({last_reason}); trying a direct request")
+    return fetch_article_html_direct(article_url)
+
+
 def extract_blocks(downloaded, article_url):
     hero, videos, page_images, blocked, blocked_texts = extract_page_media(
         downloaded, article_url
@@ -1233,11 +1301,14 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         print(f"{number:02}. Skipped duplicate: {url}")
         continue
 
-    downloaded = trafilatura.fetch_url(url)
-    if downloaded and not source_vertical_allowed(downloaded, url):
+    downloaded = fetch_article_html(url)
+    if not downloaded:
+        print(f"{number:02}. Skipped: could not download {url}")
+        continue
+    if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
-    blocks = extract_blocks(downloaded, url) if downloaded else []
+    blocks = extract_blocks(downloaded, url)
     text_blocks = [
         block["text"]
         for block in blocks
@@ -1245,7 +1316,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     ]
     clean_text = "\n\n".join(text_blocks)
 
-    if len(clean_text) < 200 and downloaded:
+    if len(clean_text) < 200:
         fallback_text = trafilatura.extract(
             downloaded,
             url=url,
@@ -1273,7 +1344,10 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             print(f"    Used recall-first extraction fallback: {len(clean_text)} characters")
 
     if len(clean_text) < 200:
-        print(f"{number:02}. Skipped: could not extract enough content from {url}")
+        print(
+            f"{number:02}. Skipped: extracted only {len(clean_text)} characters "
+            f"of article text from {url}"
+        )
         continue
 
     try:

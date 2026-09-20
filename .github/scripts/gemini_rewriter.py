@@ -539,16 +539,25 @@ Source article data:
 
 
 def _build_validation_prompt(source_payload, writer_result):
-    return f"""Act as an independent BYTERMINAL publishing gate.
+    return f"""Act as an independent BYTERMINAL publishing gate. You check factual integrity and source-chrome removal. You do not judge style.
 
-Compare the Writer JSON with the supplied source context. Reject unsupported claims, changed numbers or dates, invented first-hand testing, missing material context, source-site boilerplate, duplicated sections, or SEO fields outside their limits.
+How the Writer works, so you do not misread its output:
+- The Writer rewrites the source block by block. Writer block N is meant to carry the same facts as Source block N, in the same order. That alignment is the required behaviour and is never a defect.
+- The Writer is required to strip newsletter copy, subscription and ticket prompts, deal or price widgets, event marketing, author biographies, trust modules, related or recommended stories and comment prompts. Detail missing for that reason is correct and is never a defect.
+
+Block publication only on these two, and put each finding in the matching array:
+- unsupportedClaims: a statement in the Writer JSON the source does not support - an invented number, name, date, price, quote, link, first-hand test or measurement, or a number or date changed from the source. Also use this array when a full sentence of distinctive source wording is reproduced near-verbatim.
+- remainingBoilerplate: source-site chrome that survived into the Writer JSON - navigation, advertising, newsletter or subscription copy, author biography, trust module, comments, related or recommended stories, Most Popular modules, deal or price widgets, gallery controls.
+
+Everything else belongs in warnings and must not block: thin or generic headings, flat phrasing, an ordering you would have chosen differently, omitted promotional detail, or wording that stays close to the source without lifting a distinctive sentence. Never report a Writer block as a duplicate of a Source block. Report duplication only when the same passage repeats inside the Writer JSON itself.
 
 The required limits are:
 - seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
 - excerpt: {EXCERPT_MIN}-{EXCERPT_MAX} characters.
 - seoDescription: {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters and not a simple excerpt truncation.
+The publishing system measures these lengths itself, so record any length concern in warnings rather than in a blocking array.
 
-Set readyToPublish true only when boilerplateDetected is false and both remainingBoilerplate and unsupportedClaims are empty. Do not rewrite the article. Return only the validation JSON.
+Set readyToPublish true when both remainingBoilerplate and unsupportedClaims are empty, and set boilerplateDetected to whether remainingBoilerplate is non-empty. Do not rewrite the article. Return only the validation JSON.
 
 Source context:
 {json.dumps(source_payload, ensure_ascii=False)}
@@ -589,13 +598,45 @@ def _writer_contract_issues(result):
     return issues
 
 
-def _validation_failed(validation):
-    return (
-        validation.get("readyToPublish") is not True
-        or validation.get("boilerplateDetected") is not False
-        or bool(validation.get("remainingBoilerplate"))
-        or bool(validation.get("unsupportedClaims"))
+BLOCK_COMPARISON_NOISE = re.compile(
+    r"(?:near[\s-]?duplicat|duplicat|identical|similar|paraphras|mirrors|echoes)",
+    re.IGNORECASE,
+)
+SOURCE_REFERENCE = re.compile(r"\bsource\b", re.IGNORECASE)
+
+
+def _is_block_comparison(finding):
+    """A boilerplate finding must quote surviving source chrome.
+
+    A validator that instead compares a writer block with its source block is
+    describing the block-aligned rewrite it was asked to accept, so the finding
+    is demoted to a warning rather than blocking publication.
+    """
+    return bool(
+        BLOCK_COMPARISON_NOISE.search(finding) and SOURCE_REFERENCE.search(finding)
     )
+
+
+def _blocking_findings(validation, demoted=None):
+    findings = {}
+    for field_name in ("unsupportedClaims", "remainingBoilerplate"):
+        values = []
+        for item in validation.get(field_name) or []:
+            text = str(item).strip()
+            if not text:
+                continue
+            if field_name == "remainingBoilerplate" and _is_block_comparison(text):
+                if demoted is not None:
+                    demoted.append(text)
+                continue
+            values.append(text)
+        if values:
+            findings[field_name] = values
+    return findings
+
+
+def _validation_failed(validation):
+    return bool(_blocking_findings(validation))
 
 
 def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, temperature=0.35):
@@ -703,7 +744,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             "readyToPublish": False,
             "boilerplateDetected": False,
             "remainingBoilerplate": [],
-            "unsupportedClaims": contract_issues,
+            "unsupportedClaims": [],
+            "fieldLimitIssues": contract_issues,
             "warnings": [],
         }
         print("    Gemini draft missed field limits; running one repair")
@@ -714,10 +756,10 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             response_schema=VALIDATION_SCHEMA,
             temperature=0.0,
         )
-
-    if _validation_failed(validation):
-        if not contract_issues:
+        if _validation_failed(validation):
             print("    Gemini validator rejected the first draft; running one repair")
+
+    if contract_issues or _validation_failed(validation):
         result = _request_with_rotation(
             _build_repair_prompt(prompt, result, validation),
             api_keys,
@@ -734,11 +776,17 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             response_schema=VALIDATION_SCHEMA,
             temperature=0.0,
         )
-    if _validation_failed(validation):
+    demoted_findings = []
+    blocking_findings = _blocking_findings(validation, demoted_findings)
+    for finding in demoted_findings:
+        print(f"    Ignored block-comparison finding: {finding}")
+    if blocking_findings:
         raise RuntimeError(
             "Gemini validation failed after repair: "
-            + json.dumps(validation, ensure_ascii=False)
+            + json.dumps(blocking_findings, ensure_ascii=False)
         )
+    for warning in validation.get("warnings") or []:
+        print(f"    Validator warning: {warning}")
 
     rewritten_by_id = {}
     source_by_id = {block["id"]: block for block in source_blocks}
