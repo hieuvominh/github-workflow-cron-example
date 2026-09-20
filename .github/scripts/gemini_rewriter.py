@@ -341,6 +341,8 @@ def _source_specific_instruction(source_url):
         return "Remove The Verge Most Popular and related-story rails, newsletters, comments and account prompts."
     if host.endswith("engadget.com"):
         return "Remove Engadget newsletters, commerce recommendations, related stories and author footer modules."
+    if host.endswith("cnet.com"):
+        return "Remove CNET How We Test modules, price and deal widgets, newsletter prompts and related-story rails."
     return "Remove all source-site navigation, promotions, subscriptions, related content and interface copy."
 
 
