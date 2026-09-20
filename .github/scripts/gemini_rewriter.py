@@ -104,10 +104,22 @@ ALLOWED_AI_TAGS = [
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string"},
-        "seoTitle": {"type": "string"},
-        "excerpt": {"type": "string"},
-        "seoDescription": {"type": "string"},
+        "title": {"type": "string", "minLength": 5, "maxLength": 180},
+        "seoTitle": {
+            "type": "string",
+            "minLength": SEO_TITLE_MIN,
+            "maxLength": SEO_TITLE_MAX,
+        },
+        "excerpt": {
+            "type": "string",
+            "minLength": EXCERPT_MIN,
+            "maxLength": EXCERPT_MAX,
+        },
+        "seoDescription": {
+            "type": "string",
+            "minLength": SEO_DESCRIPTION_MIN,
+            "maxLength": SEO_DESCRIPTION_MAX,
+        },
         "contentType": {
             "type": "string",
             "enum": ["review", "news", "guide", "opinion"],
@@ -559,6 +571,33 @@ Validator findings:
 """
 
 
+def _writer_contract_issues(result):
+    checks = (
+        ("title", 5, 180),
+        ("seoTitle", SEO_TITLE_MIN, SEO_TITLE_MAX),
+        ("excerpt", EXCERPT_MIN, EXCERPT_MAX),
+        ("seoDescription", SEO_DESCRIPTION_MIN, SEO_DESCRIPTION_MAX),
+    )
+    issues = []
+    for field_name, minimum, maximum in checks:
+        value = str(result.get(field_name, "")).strip()
+        if not minimum <= len(value) <= maximum:
+            issues.append(
+                f"{field_name} must be {minimum}-{maximum} characters; "
+                f"received {len(value)}"
+            )
+    return issues
+
+
+def _validation_failed(validation):
+    return (
+        validation.get("readyToPublish") is not True
+        or validation.get("boilerplateDetected") is not False
+        or bool(validation.get("remainingBoilerplate"))
+        or bool(validation.get("unsupportedClaims"))
+    )
+
+
 def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, temperature=0.35):
     global _current_key_index
 
@@ -658,37 +697,44 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         "categorySlug": category_slug,
         "blocks": source_blocks,
     }
-    validation = _request_with_rotation(
-        _build_validation_prompt(validation_source, result),
-        api_keys,
-        response_schema=VALIDATION_SCHEMA,
-        temperature=0.0,
-    )
-    validation_failed = (
-        validation.get("readyToPublish") is not True
-        or validation.get("boilerplateDetected") is not False
-        or bool(validation.get("remainingBoilerplate"))
-        or bool(validation.get("unsupportedClaims"))
-    )
-    if validation_failed:
-        print("    Gemini validator rejected the first draft; running one repair")
-        result = _request_with_rotation(
-            _build_repair_prompt(prompt, result, validation),
-            api_keys,
-        )
+    contract_issues = _writer_contract_issues(result)
+    if contract_issues:
+        validation = {
+            "readyToPublish": False,
+            "boilerplateDetected": False,
+            "remainingBoilerplate": [],
+            "unsupportedClaims": contract_issues,
+            "warnings": [],
+        }
+        print("    Gemini draft missed field limits; running one repair")
+    else:
         validation = _request_with_rotation(
             _build_validation_prompt(validation_source, result),
             api_keys,
             response_schema=VALIDATION_SCHEMA,
             temperature=0.0,
         )
-        validation_failed = (
-            validation.get("readyToPublish") is not True
-            or validation.get("boilerplateDetected") is not False
-            or bool(validation.get("remainingBoilerplate"))
-            or bool(validation.get("unsupportedClaims"))
+
+    if _validation_failed(validation):
+        if not contract_issues:
+            print("    Gemini validator rejected the first draft; running one repair")
+        result = _request_with_rotation(
+            _build_repair_prompt(prompt, result, validation),
+            api_keys,
         )
-    if validation_failed:
+        repaired_contract_issues = _writer_contract_issues(result)
+        if repaired_contract_issues:
+            raise RuntimeError(
+                "Gemini still violated field limits after repair: "
+                + "; ".join(repaired_contract_issues)
+            )
+        validation = _request_with_rotation(
+            _build_validation_prompt(validation_source, result),
+            api_keys,
+            response_schema=VALIDATION_SCHEMA,
+            temperature=0.0,
+        )
+    if _validation_failed(validation):
         raise RuntimeError(
             "Gemini validation failed after repair: "
             + json.dumps(validation, ensure_ascii=False)
