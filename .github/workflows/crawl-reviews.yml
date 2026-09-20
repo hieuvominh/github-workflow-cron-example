@@ -35,7 +35,7 @@ jobs:
           FEED_URLS: >-
             ${{ inputs.feed_url || 'https://www.techradar.com/feeds/articletype/review,https://www.theverge.com/rss/reviews/index.xml,https://www.ign.com/rss/v2/articles/feed?categories=review,https://www.cnet.com/?zd_type=review&feed=rss2' }}
           SOURCE_VERTICAL_RULES: "www.ign.com=games,ign.com=games"
-          PUBLISHED_WITHIN_HOURS: "36"
+          PUBLISHED_WITHIN_HOURS: "100"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
