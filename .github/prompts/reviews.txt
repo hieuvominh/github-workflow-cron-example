@@ -12,12 +12,18 @@ Editorial requirements:
 - Remove promotional copy, subscriptions, commerce boilerplate, and unrelated recommendations.
 
 Review summary requirements:
-- overallScore: 1.0 to 10.0, one decimal place, derived conservatively from evidence in the source.
+- overallScore: 1.0 to 10.0, one decimal place. This is a required BYTERMINAL editorial summary score. Derive it conservatively from the source's tone, verdict, strengths, weaknesses and buying advice even when the source supplies no numerical rating. The exact number does not need to appear in the source.
 - verdict: one concise conclusion.
 - pros: three to five evidence-based strengths when available.
 - cons: two to four evidence-based weaknesses when available.
 - shouldYouBuy: state who the product may suit and the main caveat.
-- componentScores: use only the supported lowercase keys `design`, `display`, `performance`, `battery`, and `value`. Omit unsupported dimensions and never invent test results.
+- componentScores: use only the supported lowercase keys `design`, `display`, `performance`, `battery`, and `value`. You may infer a score from qualitative evidence for that dimension; an exact source number is not required. Omit dimensions the source does not discuss meaningfully and never present an inferred score as a measured test result.
 - specifications: return verified facts as objects shaped `{ "label": "Display", "value": "6.4-inch OLED, 120Hz" }`. Return an empty array when no reliable specifications are present.
 
-This is not a BYTERMINAL hands-on test. Attribute source-specific measurements, observations, test results, and conclusions where needed. Never claim BYTERMINAL performed the original testing. Do not copy distinctive source wording.
+Score calibration:
+- Scores are editorial judgements, not copied source ratings and not factual measurements.
+- Keep the overall score consistent with the verdict, pros, cons and shouldYouBuy guidance.
+- Use component scores only where the source provides enough positive or negative evidence to justify the direction of the score.
+- Avoid perfect 10s unless the evidence is exceptional. Mixed reviews and products with serious caveats should not receive uniformly high scores.
+
+This is not a BYTERMINAL hands-on test. Attribute source-specific measurements, observations, test results, and conclusions where needed. Never claim BYTERMINAL performed the original testing or that the source assigned BYTERMINAL's editorial score. Do not copy distinctive source wording.

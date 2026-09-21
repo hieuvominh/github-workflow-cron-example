@@ -66,7 +66,7 @@ CATEGORY_DIRECTIONS = {
     "ai": "Cover artificial intelligence with a neutral, technically literate voice. Explain capabilities, limitations, business impact, privacy and safety. Distinguish claims, research and independent evidence. The primary category is ai.",
     "guides": "Create a practical technology guide with an explicit outcome, prerequisites, ordered actions and caveats. Preserve exact commands and settings only when supported. Never invent a missing step. The content type is guide.",
     "news": "Use a sharp, neutral newsroom voice. Lead with what happened and why it matters. Preserve dates, entities, confirmed figures, attribution and uncertainty.",
-    "reviews": "Prepare an attributed external technology review summary. Never imply BYTERMINAL tested the product. Preserve only source-supported scores, pros, cons, verdict, advice and specifications.",
+    "reviews": "Prepare an attributed external technology review summary. Never imply BYTERMINAL tested the product. Derive a conservative BYTERMINAL editorial score from the source's qualitative evidence, verdict, strengths and weaknesses even when the source has no numerical score. Preserve source-supported pros, cons, advice and specifications.",
 }
 
 ALLOWED_PRIMARY_CATEGORIES = ["phones", "ai", "computing", "gadgets", "gaming"]
@@ -487,10 +487,14 @@ Review workflow rules:
 - primaryCategory must be exactly one of: {', '.join(ALLOWED_PRIMARY_CATEGORIES)}.
 - Set eligibleForPublication to true only for technology products, games, computer hardware, phones, consumer electronics, or AI products that fit those categories.
 - Set eligibleForPublication to false for movies, television, entertainment-only coverage, mattresses, beauty, kitchen, exercise equipment, household appliances, or anything outside BYTERMINAL's taxonomy, and explain why in rejectionReason.
-- Return reviewSummary with overallScore, verdict, factual pros, factual cons, shouldYouBuy, componentScores and verified specifications.
+- Return reviewSummary with an editorial overallScore, verdict, factual pros, factual cons, shouldYouBuy, evidence-based componentScores and verified specifications.
 - This is an attributed external review summary. Never claim BYTERMINAL tested the product.
-- Attribute measurements, testing observations, scores and conclusions to the source.
-- Never invent a numerical score or convert another publication's score into a BYTERMINAL score.
+- Attribute measurements, testing observations and source conclusions to the source.
+- overallScore is BYTERMINAL's editorial summary score. Infer it conservatively from the article's tone, verdict, strengths, weaknesses and buying advice even when the source gives no numerical score. This editorial judgement is required and is not a factual claim that the source assigned that exact number.
+- If the source has a score, use it as one signal but do not present the BYTERMINAL score as the source's score or mechanically claim an unmentioned conversion.
+- componentScores may also be inferred from qualitative evidence for that specific dimension. Include only dimensions the source discusses meaningfully. A component score must agree with the source's praise, criticism and caveats; it does not require an exact source number.
+- Keep scores measured and internally consistent: strong praise with minor caveats should score higher than a mixed verdict, while serious flaws or poor value should materially lower the relevant score. Do not use a perfect 10 unless the source evidence is exceptionally strong.
+- Editorial scores are allowed estimates. They must never be described as a benchmark, measurement, source-issued rating or result of BYTERMINAL hands-on testing.
 """
     elif CONTENT_TYPE_LOCK:
         review_rules = f'\n- contentType must be "{CONTENT_TYPE_LOCK}".\n'
@@ -537,12 +541,19 @@ def _build_validation_prompt(source_payload, writer_result):
 How the Writer works, so you do not misread its output:
 - The Writer rewrites the source block by block. Writer block N is meant to carry the same facts as Source block N, in the same order. That alignment is the required behaviour and is never a defect.
 - The Writer is required to strip newsletter copy, subscription and ticket prompts, deal or price widgets, event marketing, author biographies, trust modules, related or recommended stories and comment prompts. Detail missing for that reason is correct and is never a defect.
+- For reviews, overallScore and componentScores are BYTERMINAL editorial judgements inferred from the source's qualitative evidence. Their exact numbers usually will not appear in the source, and that is intentional.
 
 Block publication only on these two, and put each finding in the matching array:
-- unsupportedClaims: a statement in the Writer JSON the source does not support - an invented number, name, date, price, quote, link, first-hand test or measurement, or a number or date changed from the source. Also use this array when a full sentence of distinctive source wording is reproduced near-verbatim.
+- unsupportedClaims: a factual statement in the Writer JSON the source does not support - an invented name, date, price, quote, link, first-hand test or measurement, or a factual number or date changed from the source. Review scores are the explicit exception described below.
 - remainingBoilerplate: source-site chrome that survived into the Writer JSON - navigation, advertising, newsletter or subscription copy, author biography, trust module, comments, related or recommended stories, Most Popular modules, deal or price widgets, gallery controls.
 
-Everything else belongs in warnings and must not block: thin or generic headings, flat phrasing, an ordering you would have chosen differently, omitted promotional detail, or wording that stays close to the source without lifting a distinctive sentence. Never report a Writer block as a duplicate of a Source block. Report duplication only when the same passage repeats inside the Writer JSON itself.
+Review score policy:
+- Never put overallScore or componentScores in unsupportedClaims merely because the exact number is absent from the source.
+- Accept an inferred score when it is reasonably consistent with the article's qualitative assessment, even if another editor could choose a somewhat different number.
+- Block a score only when it clearly contradicts the source's overall verdict, a component has no relevant qualitative evidence at all, or the copy falsely says the source assigned that number or BYTERMINAL measured it hands-on.
+- A score disagreement within a reasonable editorial range is a warning at most, never a blocker.
+
+Everything else belongs in warnings and must not block: tag or taxonomy preferences, thin or generic headings, flat phrasing, an ordering you would have chosen differently, omitted promotional detail, or wording that stays close to the source without lifting a substantial distinctive passage. Tags are editorial classification and do not need to appear as exact words in the source. Never report a Writer block as a duplicate of a Source block. Report duplication only when the same passage repeats inside the Writer JSON itself. Similarity or near-verbatim concerns belong in warnings; reserve unsupportedClaims for factual fabrication.
 
 The recommended editorial ranges are:
 - seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
@@ -563,7 +574,7 @@ Writer JSON:
 def _build_repair_prompt(writer_prompt, writer_result, validation):
     return f"""{writer_prompt}
 
-The first draft failed an independent publishing check. Return a complete corrected JSON object, fixing every issue without adding unsupported facts.
+The first draft failed an independent publishing check. Return a complete corrected JSON object, fixing every issue without adding unsupported factual claims. For a review, preserve or adjust the required editorial overallScore and evidence-based componentScores; do not delete them merely because the source lacks exact numeric ratings.
 
 First draft:
 {json.dumps(writer_result, ensure_ascii=False)}
@@ -583,10 +594,19 @@ def _writer_contract_issues(result):
 
 
 BLOCK_COMPARISON_NOISE = re.compile(
-    r"(?:near[\s-]?duplicat|duplicat|identical|similar|paraphras|mirrors|echoes)",
+    r"(?:near[\s-]?(?:duplicat|verbatim)|duplicat|identical|similar|paraphras|mirrors|echoes|reproduc)",
     re.IGNORECASE,
 )
 SOURCE_REFERENCE = re.compile(r"\bsource\b", re.IGNORECASE)
+EDITORIAL_SCORE_REFERENCE = re.compile(
+    r"(?:overallScore|componentScores?|editorial (?:summary )?score|numeric(?:al)? score)",
+    re.IGNORECASE,
+)
+SCORE_MISATTRIBUTION = re.compile(
+    r"(?:source (?:assigned|gave|awarded)|presented as (?:the )?source|"
+    r"BYTERMINAL (?:tested|measured|benchmarked)|hands[\s-]?on)",
+    re.IGNORECASE,
+)
 
 
 def _is_block_comparison(finding):
@@ -601,6 +621,14 @@ def _is_block_comparison(finding):
     )
 
 
+def _is_editorial_score_finding(finding):
+    """Score plausibility is editorial judgement, not a factual publish blocker."""
+    return bool(
+        EDITORIAL_SCORE_REFERENCE.search(finding)
+        and not SCORE_MISATTRIBUTION.search(finding)
+    )
+
+
 def _blocking_findings(validation, demoted=None):
     findings = {}
     for field_name in ("unsupportedClaims", "remainingBoilerplate"):
@@ -609,7 +637,7 @@ def _blocking_findings(validation, demoted=None):
             text = str(item).strip()
             if not text:
                 continue
-            if field_name == "remainingBoilerplate" and _is_block_comparison(text):
+            if _is_block_comparison(text) or _is_editorial_score_finding(text):
                 if demoted is not None:
                     demoted.append(text)
                 continue
