@@ -7,6 +7,7 @@ CRITICAL JSON STRUCTURE RULES:
 - DO NOT return the frontend EditorialPost DTO.
 - DO NOT merge the `blocks` array into one large `body` string. Preserve the array of blocks.
 - Preserve every supplied block ID and its exact original order.
+- Return `drop: false` for every retained block. For a block covered by the removal rules below, preserve its ID and position but return `drop: true`; do not move its text into another block.
 - Keep image placements intact; images are merged back into the rewritten blocks by the crawler.
 
 1. EDITORIAL & CATEGORY REQUIREMENTS:
@@ -17,16 +18,16 @@ CRITICAL JSON STRUCTURE RULES:
 - Add 2 to 5 useful, professional section headings to structure the article logically.
 
 2. STRICT NOISE & METHODOLOGY FILTERING (DROP THESE BLOCKS):
-- Completely REMOVE any "How we test", "Testing methodology", or author background sections. Do NOT include details about how long the product was tested, the specific testing playlists used, or the author's previous review history.
+- Set `drop: true` on every block that does not help the reader evaluate the product. Completely remove "How I tested", "How we test", and "Testing methodology" sections, including their headings, bullet points and paragraphs. Also remove test duration, testing playlists, the reviewer's phone or streaming setup, comparisons listed only to describe methodology, career history, credentials, previously tested products, publisher trust claims, and publication-history stamps such as "First reviewed September 2026", "Originally reviewed", or "Last updated".
 - Remove ALL promotional copy, newsletter subscriptions, commerce boilerplate, affiliate disclosures, and unrelated "read more" recommendations.
 - Completely ignore and remove raw HTML tags, navigational text (e.g., 'Skip to content', 'Menu', 'Sign In'), cookie consent notices, image alt-texts disguised as paragraphs, or social media share buttons that the crawler might have accidentally captured.
 - Only process text blocks that contribute to the actual product review itself.
 
 3. BRAND, SOURCE & AUTHOR REPLACEMENT:
 - ENTIRELY REMOVE the original author's name, byline, individual author bios, personal career timelines, and self-referential backstory (e.g., delete things like "By John Doe", "I worked at TechRadar for 8 years").
-- DO NOT mention original publishers, websites, or magazines by name (e.g., completely remove mentions of TechCrunch, The Verge, TechRadar, Tom's Hardware, CNET, IGN, etc.).
-- Transform personal author experience statements into neutral editorial authority (e.g., rewrite "I've tested GPUs for 8 years" into "Based on extensive multi-year hardware testing and industry benchmarking...").
-- Reframe source references to neutral editorial terms (e.g., "industry testing shows", "technical evaluations indicate", "BYTERMINAL analysis shows").
+- DO NOT mention the original publisher, website, magazine or author by name anywhere in the output, including title, SEO fields, article blocks, verdict, pros, cons, buying advice and specifications. Source attribution is already rendered separately by the publishing system.
+- Outside removed methodology sections, rewrite useful first-person product findings in neutral third person, using "the source reviewer" or "the source review" when attribution is necessary.
+- Never rewrite source testing as "BYTERMINAL testing", "BYTERMINAL analysis", "our test" or any wording implying BYTERMINAL handled the product.
 
 4. REVIEW SUMMARY REQUIREMENTS:
 - `overallScore`: A number from 1.0 to 10.0 (one decimal place). This is a required BYTERMINAL editorial summary score. Derive it conservatively from the source's tone, verdict, strengths, weaknesses, and buying advice even if the source supplies no numerical rating.

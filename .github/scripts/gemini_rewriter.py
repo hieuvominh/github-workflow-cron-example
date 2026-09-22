@@ -36,6 +36,10 @@ COMMON_BOILERPLATE_PATTERNS = (
     r"^\s*related stor(?:y|ies)\s*$",
     r"^\s*advertisement\s*$",
 )
+REVIEW_BOILERPLATE_PATTERNS = (
+    r"^\s*(?:[•*\-–—]\s*)?(?:first|originally)\s+reviewed\b",
+    r"^\s*(?:[•*\-–—]\s*)?last\s+(?:reviewed|updated)\b",
+)
 
 SOURCE_BOILERPLATE_PATTERNS = {
     "techradar.com": (
@@ -198,8 +202,9 @@ RESPONSE_SCHEMA = {
                     },
                     "sectionHeading": {"type": "string"},
                     "text": {"type": "string"},
+                    "drop": {"type": "boolean"},
                 },
-                "required": ["id", "type", "level", "sectionHeading", "text"],
+                "required": ["id", "type", "level", "sectionHeading", "text", "drop"],
             },
         },
     },
@@ -302,6 +307,8 @@ def _source_host(source_url):
 
 def _boilerplate_patterns(source_url):
     patterns = list(COMMON_BOILERPLATE_PATTERNS)
+    if CONTENT_TYPE_LOCK == "review":
+        patterns.extend(REVIEW_BOILERPLATE_PATTERNS)
     host = _source_host(source_url)
     for domain, domain_patterns in SOURCE_BOILERPLATE_PATTERNS.items():
         if host == domain or host.endswith("." + domain):
@@ -489,7 +496,11 @@ Review workflow rules:
 - Set eligibleForPublication to false for movies, television, entertainment-only coverage, mattresses, beauty, kitchen, exercise equipment, household appliances, or anything outside BYTERMINAL's taxonomy, and explain why in rejectionReason.
 - Return reviewSummary with an editorial overallScore, verdict, factual pros, factual cons, shouldYouBuy, evidence-based componentScores and verified specifications.
 - This is an attributed external review summary. Never claim BYTERMINAL tested the product.
-- Attribute measurements, testing observations and source conclusions to the source.
+- Rewrite first-person product observations in neutral third person, such as "The source reviewer found..."; never retain "I tested", "we tested" or wording that implies BYTERMINAL performed the test.
+- Do not name the source publisher inside article blocks. The publishing system credits the source separately.
+- Set drop=true on every block that does not help a reader evaluate the product. This includes "How I tested" and testing-methodology sections, test duration or setup, playlists, reviewer credentials, author biographies, career history, publisher trust copy, "First reviewed" or "Last updated" stamps, promotions, affiliate/deal copy, related links and repeated summaries. Do not move dropped material into another block.
+- Never output the original publisher, website, magazine or author name in any field, including titles, SEO fields, article blocks and reviewSummary. Source credit is handled separately from this JSON.
+- Preserve useful product measurements and findings outside those removed sections, attributing them to "the source review" or "the source reviewer" when attribution is needed.
 - overallScore is BYTERMINAL's editorial summary score. Infer it conservatively from the article's tone, verdict, strengths, weaknesses and buying advice even when the source gives no numerical score. This editorial judgement is required and is not a factual claim that the source assigned that exact number.
 - If the source has a score, use it as one signal but do not present the BYTERMINAL score as the source's score or mechanically claim an unmentioned conversion.
 - componentScores may also be inferred from qualitative evidence for that specific dimension. Include only dimensions the source discusses meaningfully. A component score must agree with the source's praise, criticism and caveats; it does not require an exact source number.
@@ -512,10 +523,10 @@ Mandatory rules:
 - Never invent facts, first-hand testing, measurements, quotes, images, links or source details.
 - Do not copy distinctive wording from the source.
 - Keep every returned block id exactly equal to an input block id.
-- Preserve the input block order and return one rewritten text value per input block.
+- Preserve the input block order and return one result per input block. Set drop=false for retained blocks. In the review workflow only, set drop=true for any non-editorial, redundant or source-identifying block defined below; its text may be empty.
 - Classify every text block as either a heading or a paragraph. Correct unreliable source labels when necessary.
 - Use level "h2" or "h3" for headings and "none" for paragraphs.
-- Create a navigable article structure without deleting paragraph content. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
+- Create a navigable article structure without deleting useful product evidence. The review-only drop rule above removes surplus material that does not belong in the finished article. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable retained paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
 - Do not add image placeholders.
 - title: accurate editorial headline, ideally 45-90 characters.
 - seoTitle: natural search title, ideally {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
@@ -541,11 +552,12 @@ def _build_validation_prompt(source_payload, writer_result):
 How the Writer works, so you do not misread its output:
 - The Writer rewrites the source block by block. Writer block N is meant to carry the same facts as Source block N, in the same order. That alignment is the required behaviour and is never a defect.
 - The Writer is required to strip newsletter copy, subscription and ticket prompts, deal or price widgets, event marketing, author biographies, trust modules, related or recommended stories and comment prompts. Detail missing for that reason is correct and is never a defect.
+- In reviews, a block with drop=true intentionally removes non-editorial, redundant or source-identifying material. Do not treat that removal as missing context or an unsupported claim.
 - For reviews, overallScore and componentScores are BYTERMINAL editorial judgements inferred from the source's qualitative evidence. Their exact numbers usually will not appear in the source, and that is intentional.
 
 Block publication only on these two, and put each finding in the matching array:
 - unsupportedClaims: a factual statement in the Writer JSON the source does not support - an invented name, date, price, quote, link, first-hand test or measurement, or a factual number or date changed from the source. Review scores are the explicit exception described below.
-- remainingBoilerplate: source-site chrome that survived into the Writer JSON - navigation, advertising, newsletter or subscription copy, author biography, trust module, comments, related or recommended stories, Most Popular modules, deal or price widgets, gallery controls.
+- remainingBoilerplate: source-site residue that survived into the Writer JSON - navigation, advertising, newsletter or subscription copy, author biography, reviewer credentials, testing-methodology sections, first-person testing voice, "First reviewed"/"Last updated" stamps, the original publisher/site/author name, trust modules, comments, related or recommended stories, Most Popular modules, deal or price widgets, or gallery controls. In reviews, any such residue in any output field is blocking; source credit is handled separately.
 
 Review score policy:
 - Never put overallScore or componentScores in unsupportedClaims merely because the exact number is absent from the source.
@@ -813,6 +825,16 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             raise RuntimeError(f"Gemini returned unknown block id {block_id}")
         if block_id in rewritten_by_id:
             raise RuntimeError(f"Gemini duplicated block id {block_id}")
+        drop = CONTENT_TYPE_LOCK == "review" and item.get("drop") is True
+        if drop:
+            rewritten_by_id[block_id] = {
+                "text": "",
+                "type": block_type,
+                "level": level,
+                "sectionHeading": "",
+                "drop": True,
+            }
+            continue
         if not text:
             text = source_by_id.get(block_id, {}).get("text", "").strip()
             print(f"    Gemini returned empty block {block_id}; preserving source text")
@@ -841,6 +863,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             "type": block_type,
             "level": level,
             "sectionHeading": section_heading,
+            "drop": False,
         }
 
     missing_ids = valid_ids.difference(rewritten_by_id)
@@ -852,6 +875,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             "type": block_type,
             "level": source_block.get("level", "h2") if block_type == "heading" else "none",
             "sectionHeading": "",
+            "drop": False,
         }
         print(f"    Gemini omitted block {block_id}; preserving source block")
 
@@ -868,12 +892,12 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     classified_headings = [
         block["text"]
         for block in rewritten_by_id.values()
-        if block["type"] == "heading"
+        if not block["drop"] and block["type"] == "heading"
     ]
     inserted_headings = [
         block["sectionHeading"]
         for block in rewritten_by_id.values()
-        if block["sectionHeading"]
+        if not block["drop"] and block["sectionHeading"]
     ]
     heading_count = len(classified_headings) + len(inserted_headings)
     required_heading_count = 2 if len(source_blocks) >= 6 else 1
@@ -898,6 +922,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     for block_id, block in enumerate(blocks):
         if block_id in rewritten_by_id:
             rewritten = rewritten_by_id[block_id]
+            if rewritten["drop"]:
+                continue
             if rewritten["sectionHeading"]:
                 rewritten_blocks.append(
                     {
