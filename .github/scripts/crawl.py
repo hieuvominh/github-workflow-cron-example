@@ -168,6 +168,7 @@ LINK_SECTION_HEADINGS = (
 )
 LINK_SECTION_HEADING_MAX_CHARS = 60
 HEADING_TAG = re.compile(r"h[1-6]")
+READ_MORE_PREFIX = re.compile(r"^\s*read\s+more\s*:", re.IGNORECASE)
 EDITORIAL_POLICY_LINK_PARTS = (
     "/how-we-test",
     "/how-we-review",
@@ -577,6 +578,21 @@ def remove_link_sections(scope):
     return removed
 
 
+def remove_read_more_blocks(scope):
+    """Drop inline cross-promotion blocks such as "Read more: Best ..."."""
+    removed = 0
+    nodes = scope.xpath(
+        ".//p|.//li|.//blockquote|.//h1|.//h2|.//h3|.//h4|.//h5|.//h6"
+    )
+    for node in nodes:
+        parent = node.getparent()
+        if parent is None or not READ_MORE_PREFIX.match(element_text(node)):
+            continue
+        parent.remove(node)
+        removed += 1
+    return removed
+
+
 def remove_review_sign_off(scope):
     """Drop the reviews-guarantee block a review closes with.
 
@@ -693,6 +709,7 @@ def prepare_article_html(downloaded):
     removed = prune_non_editorial_nodes(document, body)
     scope = body if body is not None else document
     removed += remove_link_sections(scope)
+    removed += remove_read_more_blocks(scope)
     removed += remove_review_sign_off(scope)
     removed += remove_boilerplate_phrases(scope)
     if removed:
@@ -1588,11 +1605,14 @@ def extract_blocks(downloaded, article_url):
             for blocked_text in blocked_texts
         )
 
+    def is_read_more_copy(text):
+        return bool(READ_MORE_PREFIX.match(text or ""))
+
     def walk(node):
         kind = tag_name(node)
         if kind == "head":
             text = element_text(node)
-            if text and not is_follow_copy(text):
+            if text and not is_follow_copy(text) and not is_read_more_copy(text):
                 level = node.get("rend", "h2")
                 blocks.append(
                     {
@@ -1604,7 +1624,7 @@ def extract_blocks(downloaded, article_url):
             return
         if kind in ("p", "quote", "item"):
             text = element_text(node)
-            if text and is_follow_copy(text):
+            if text and (is_follow_copy(text) or is_read_more_copy(text)):
                 text = ""
             if text:
                 prefix = "• " if kind == "item" else ""
@@ -1696,9 +1716,10 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         fallback_paragraphs = [
             paragraph.strip()
             for paragraph in re.split(r"\n{2,}", fallback_text)
-            if paragraph.strip()
+            if paragraph.strip() and not READ_MORE_PREFIX.match(paragraph)
         ]
-        if len(fallback_text.strip()) >= 200:
+        fallback_text = "\n\n".join(fallback_paragraphs)
+        if len(fallback_text) >= 200:
             media_blocks = [
                 block
                 for block in blocks
@@ -1708,7 +1729,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
                 {"type": "paragraph", "text": paragraph[:10_000]}
                 for paragraph in fallback_paragraphs
             ]
-            clean_text = fallback_text.strip()
+            clean_text = fallback_text
             print(f"    Used recall-first extraction fallback: {len(clean_text)} characters")
 
     if len(clean_text) < 200:

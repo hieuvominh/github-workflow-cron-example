@@ -16,12 +16,13 @@ CRITICAL JSON STRUCTURE RULES:
 - Rewrite each non-empty text block in fluent, professional English while retaining its factual meaning.
 - Add 2 to 5 useful, professional section headings to structure the article logically.
 
-2. NOISE FILTERING & CRAWLER ARTIFACTS:
+2. STRICT NOISE & METHODOLOGY FILTERING (DROP THESE BLOCKS):
+- Completely REMOVE any "How we test", "Testing methodology", or author background sections. Do NOT include details about how long the product was tested, the specific testing playlists used, or the author's previous review history.
 - Remove ALL promotional copy, newsletter subscriptions, commerce boilerplate, affiliate disclosures, and unrelated "read more" recommendations.
 - Completely ignore and remove raw HTML tags, navigational text (e.g., 'Skip to content', 'Menu', 'Sign In'), cookie consent notices, image alt-texts disguised as paragraphs, or social media share buttons that the crawler might have accidentally captured.
-- Only process text blocks that contribute to the actual product review.
+- Only process text blocks that contribute to the actual product review itself.
 
-3. BRAND, SOURCE & AUTHOR REPLACEMENT (STRICT):
+3. BRAND, SOURCE & AUTHOR REPLACEMENT:
 - ENTIRELY REMOVE the original author's name, byline, individual author bios, personal career timelines, and self-referential backstory (e.g., delete things like "By John Doe", "I worked at TechRadar for 8 years").
 - DO NOT mention original publishers, websites, or magazines by name (e.g., completely remove mentions of TechCrunch, The Verge, TechRadar, Tom's Hardware, CNET, IGN, etc.).
 - Transform personal author experience statements into neutral editorial authority (e.g., rewrite "I've tested GPUs for 8 years" into "Based on extensive multi-year hardware testing and industry benchmarking...").
