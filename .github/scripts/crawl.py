@@ -1,4 +1,5 @@
 import base64
+import copy
 import hashlib
 import html
 import json
@@ -121,6 +122,52 @@ NON_CONTENT_TOKENS = NON_EDITORIAL_TOKENS | {
     "social",
     "comments",
 }
+ARTICLE_BODY_XPATHS = (
+    # Future plc (Tom's Hardware, TechRadar, PC Gamer, Tom's Guide) puts the
+    # editorial copy in this container. Everything the reader also sees under
+    # <article> -- the author bio slice, the XenForo comment list, the
+    # recirculation rails -- sits outside it.
+    '//*[@id="article-body"]',
+)
+PRUNE_TOKENS = {
+    "advert",
+    "advertisement",
+    "author",
+    "authors",
+    "biography",
+    "byline",
+    "comment",
+    "comments",
+    # Gallery lightbox chrome. Future plc renders a second, expanded copy of
+    # every gallery whose only text is a "View Original" link per slide; the
+    # slides themselves stay, because the chrome holds no images.
+    "lightbox",
+    "surroundings",
+    "newsletter",
+    "popular",
+    "promo",
+    "recirculation",
+    "recommendation",
+    "recommended",
+    "related",
+    "share",
+    "social",
+    "sponsored",
+    "subscribe",
+    "trending",
+}
+LINK_SECTION_HEADINGS = (
+    "more from",
+    "more like this",
+    "read more",
+    "recommended for you",
+    "related",
+    "see also",
+    "you may also like",
+    "you might also like",
+)
+LINK_SECTION_HEADING_MAX_CHARS = 60
+HEADING_TAG = re.compile(r"h[1-6]")
 SOURCE_BLOCKED_IMAGE_CLASSES = {
     "tomshardware.com": {
         "endorsement-hero-image",
@@ -434,6 +481,144 @@ def remove_source_blocked_content(downloaded, article_url):
     return lxml_html.tostring(document, encoding="unicode", method="html")
 
 
+def article_body_node(document):
+    """The container holding the editorial copy, when the template names one."""
+    for xpath in ARTICLE_BODY_XPATHS:
+        nodes = document.xpath(xpath)
+        if nodes:
+            return nodes[0]
+    return None
+
+
+def prune_non_editorial_nodes(document, keep=None):
+    """Drop containers that never hold article copy.
+
+    trafilatura decides what is boilerplate from text and link density alone,
+    which is not enough on a publisher template that renders reader comments,
+    an author biography and a newsletter form as ordinary prose inside the
+    article element. Its include_comments switch does not help either: it only
+    recognises its own COMMENTS_XPATH, and ul.xenforo-comments-list is not in
+    it, so the replies are classed as body text.
+
+    The class and id tokens are the reliable signal, and the crawler already
+    trusts them for images. Deciding here, on the original DOM, applies the
+    same verdict to text, because class names do not survive extraction.
+
+    Ancestors of *keep* are never removed, so a promotional token on a wrapper
+    -- widgetArea16 contains #article-body -- cannot take the article with it.
+    """
+    protected = set()
+    if keep is not None:
+        protected = {id(node) for node in keep.iterancestors()} | {id(keep)}
+
+    root = document.getroottree().getroot()
+    removed = 0
+    for node in document.xpath("//*[@class or @id]"):
+        parent = node.getparent()
+        if parent is None or id(node) in protected:
+            continue
+        if node.getroottree().getroot() is not root:
+            continue  # already gone with an ancestor
+        tokens = set(CLASS_TOKENS.split((node.get("class") or "").lower()))
+        tokens |= set(CLASS_TOKENS.split((node.get("id") or "").lower()))
+        if tokens & PRUNE_TOKENS:
+            parent.remove(node)
+            removed += 1
+    return removed
+
+
+def remove_link_sections(scope):
+    """Drop a "More from ..." rail rendered inside the body container.
+
+    Tom's Guide closes an article with <h3 id="section-more-from-tom-s-guide">
+    and a bare <ul> of three headlines, both inside #article-body and neither
+    carrying a class the token rules can see. The heading is the only signal,
+    so the section it opens is removed with it, up to the next heading of the
+    same or higher rank -- a rail is always last, but that keeps the rule from
+    swallowing the article when it is not.
+    """
+    removed = 0
+    for heading in scope.xpath(".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"):
+        if heading.getparent() is None:
+            continue
+        text = normalized_text(element_text(heading))
+        if len(text) > LINK_SECTION_HEADING_MAX_CHARS or not any(
+            text.startswith(phrase) for phrase in LINK_SECTION_HEADINGS
+        ):
+            continue
+        rank = tag_name(heading)[1]
+        doomed = [heading]
+        for sibling in heading.itersiblings():
+            name = tag_name(sibling) if isinstance(sibling.tag, str) else ""
+            if HEADING_TAG.fullmatch(name) and name[1] <= rank:
+                break
+            doomed.append(sibling)
+        for node in doomed:
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+                removed += 1
+    return removed
+
+
+def isolate_article_body(document, body):
+    """Empty the page around the article container, in place.
+
+    Serialising the container on its own would be shorter, but trafilatura
+    stops recognising headings when it is handed a bare <div>: the same review
+    yields eight <head> elements as a page and none as a fragment. Keeping the
+    document shell -- and <head> with it, which carries the language and
+    canonical URL trafilatura reads -- avoids that while still leaving only
+    article copy behind.
+    """
+    node = body
+    while True:
+        parent = node.getparent()
+        if parent is None:
+            return document
+        for sibling in list(parent):
+            if sibling is node:
+                continue
+            # Comments and processing instructions carry a callable .tag
+            if isinstance(sibling.tag, str) and tag_name(sibling) == "head":
+                continue
+            parent.remove(sibling)
+        node = parent
+
+
+def prepare_article_html(downloaded):
+    """Split the page into the text trafilatura may read and the media context.
+
+    Returns the pruned page, which still carries the hero figure and the social
+    card meta that media extraction needs, and a copy of it emptied down to the
+    article container, which is all the text extractor is allowed to see. The
+    second is None for a template this crawler does not recognise; extraction
+    then falls back to the pruned page, as before.
+    """
+    try:
+        document = lxml_html.fromstring(downloaded)
+    except (TypeError, ValueError, lxml_html.etree.ParserError):
+        return downloaded, None
+
+    body = article_body_node(document)
+    removed = prune_non_editorial_nodes(document, body)
+    removed += remove_link_sections(body if body is not None else document)
+    if removed:
+        print(f"    Pruned {removed} non-editorial container(s)")
+
+    page_html = lxml_html.tostring(document, encoding="unicode", method="html")
+    if body is None:
+        print("    Article body container not found; extracting from the full page")
+        return page_html, None
+
+    scoped = copy.deepcopy(document)
+    scoped_body = article_body_node(scoped)
+    if scoped_body is None:
+        return page_html, None
+    isolate_article_body(scoped, scoped_body)
+    return page_html, lxml_html.tostring(scoped, encoding="unicode", method="html")
+
+
 def image_identity(source_url):
     """Collapse CDN resize variants of one image onto a single key.
 
@@ -592,10 +777,11 @@ def recoverable_images(document, article_url, blocked):
     from the page. It then still has to anchor onto a paragraph that survived
     extraction, which is enforced by add_page_media.
     """
+    body = article_body_node(document)
     scopes = (
-        document.xpath("//article")
-        or document.xpath("//main")
-        or [document]
+        [body]
+        if body is not None
+        else document.xpath("//article") or document.xpath("//main") or [document]
     )
     images = []
     seen = set(blocked)
@@ -1270,17 +1456,22 @@ def fetch_article_html(article_url):
 
 
 def extract_blocks(downloaded, article_url):
+    page_html, body_html = prepare_article_html(downloaded)
     hero, videos, page_images, blocked, blocked_texts = extract_page_media(
-        downloaded, article_url
+        page_html, article_url
     )
+    # favor_precision is trafilatura's defence against surrounding boilerplate.
+    # Scoping to the article container removes what it defends against, and on
+    # a container-sized document its density thresholds start discarding
+    # link-heavy body paragraphs instead. Keep it only for the full-page path.
     extracted_xml = trafilatura.extract(
-        downloaded,
+        body_html or page_html,
         url=article_url,
         include_comments=False,
         include_tables=False,
         include_images=True,
         include_formatting=True,
-        favor_precision=True,
+        favor_precision=body_html is None,
         output_format="xml",
     )
     if not extracted_xml:
@@ -1401,8 +1592,9 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     clean_text = "\n\n".join(text_blocks)
 
     if len(clean_text) < 200:
+        fallback_page, fallback_body = prepare_article_html(downloaded)
         fallback_text = trafilatura.extract(
-            downloaded,
+            fallback_body or fallback_page,
             url=url,
             include_comments=False,
             include_tables=True,
