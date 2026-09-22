@@ -63,7 +63,7 @@ slug and publication time. The source publication date is context only and is no
 
 - `MEDIA_REPO`
 - `MEDIA_BRANCH` (defaults to `main`)
-- `GEMINI_MODEL` (defaults to `gemini-2.5-flash`)
+- `GEMINI_MODEL` (defaults to `gemini-3.6-flash`)
 - `NEWS_FEED_URL`
 - `PHONES_FEED_URL`
 - `AI_FEED_URL`

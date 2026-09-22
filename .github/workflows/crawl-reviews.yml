@@ -44,5 +44,5 @@ jobs:
           MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
           MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
         run: python .github/scripts/crawl.py

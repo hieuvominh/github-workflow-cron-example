@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 MAX_INPUT_CHARS = int(os.environ.get("GEMINI_MAX_INPUT_CHARS", "60000"))
 CONTENT_TYPE_LOCK = os.environ.get("CONTENT_TYPE_LOCK", "").strip()
 DYNAMIC_PRIMARY_CATEGORY = (
