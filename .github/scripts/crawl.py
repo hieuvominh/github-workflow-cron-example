@@ -176,6 +176,14 @@ EDITORIAL_POLICY_LINK_PARTS = (
 )
 SIGN_OFF_LIST_MAX_ITEMS = 4
 SIGN_OFF_ITEM_MAX_CHARS = 160
+# Widgets on a publisher that ships build-hashed class names, where the visible
+# wording is the only part that survives a deploy. Each entry is the phrase and
+# the largest container, in characters, that the phrase may take with it: the
+# cap is what stops an article merely mentioning the phrase from being cut.
+BOILERPLATE_PHRASE_BLOCKS = (
+    ("verge score", 40),
+    ("follow topics and authors", 1_200),
+)
 SOURCE_BLOCKED_IMAGE_CLASSES = {
     "tomshardware.com": {
         "endorsement-hero-image",
@@ -603,6 +611,45 @@ def remove_review_sign_off(scope):
     return removed
 
 
+def remove_boilerplate_phrases(scope):
+    """Drop widgets that only their wording identifies.
+
+    The Verge renders its score as <p class="xhcq402">Verge Score</p> beside
+    the number, and closes a story with a "Follow topics and authors" block.
+    Both class names are build hashes -- the same badge appears elsewhere on
+    the page as "_1j7g5t32 xhcq402" -- so matching them would survive only
+    until the next deploy. The wording is what stays put.
+
+    From the phrase, the highest ancestor still within the entry's character
+    cap is removed, which takes the score digits and the topic chips with the
+    label. An article that merely mentions the phrase in prose has no ancestor
+    that small, so nothing is removed.
+    """
+    removed = 0
+    for phrase, max_chars in BOILERPLATE_PHRASE_BLOCKS:
+        for node in list(scope.iter()):
+            if not isinstance(node.tag, str) or node.getparent() is None:
+                continue
+            if phrase not in normalized_text(element_text(node)):
+                continue
+            if any(
+                phrase in normalized_text(element_text(child))
+                for child in node
+                if isinstance(child.tag, str)
+            ):
+                continue  # a descendant carries it; act on the deepest one
+            target = None
+            for candidate in [node] + list(node.iterancestors()):
+                if len(element_text(candidate)) > max_chars:
+                    break
+                target = candidate
+            if target is None or target.getparent() is None:
+                continue
+            target.getparent().remove(target)
+            removed += 1
+    return removed
+
+
 def isolate_article_body(document, body):
     """Empty the page around the article container, in place.
 
@@ -647,6 +694,7 @@ def prepare_article_html(downloaded):
     scope = body if body is not None else document
     removed += remove_link_sections(scope)
     removed += remove_review_sign_off(scope)
+    removed += remove_boilerplate_phrases(scope)
     if removed:
         print(f"    Pruned {removed} non-editorial container(s)")
 

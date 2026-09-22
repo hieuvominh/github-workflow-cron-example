@@ -4,8 +4,9 @@ Run with: python .github/scripts/test_article_scope.py
 
 The fixtures are real pages with <script>, <style>, <svg> and <template>
 stripped out, which keeps them committable without changing the DOM the
-extractor sees. They cover the two ways non-content reaches the rewriter on a
-Future plc template, across the three of its sites the workflows crawl.
+extractor sees. They cover the three ways non-content reaches the rewriter:
+around the body container, inside it, and -- where there is no container and no
+usable class name -- by wording alone.
 
 Around the body: <article> also wraps the author bio slice and the XenForo
 comment list. trafilatura keeps both, and its include_comments=False switch
@@ -17,6 +18,10 @@ Inside the body: #article-body itself holds an injected newsletter form and
 inline "read more" cards. Tom's Guide closes with a "More from Tom's Guide"
 rail whose only signal is its heading, and TechRadar with a classless <ul>
 naming its reviews guarantee, identified only by the policy link inside it.
+
+No container at all: The Verge has no #article-body and ships build-hashed
+class names, so its score badge and "Follow topics and authors" block are
+recognised by their wording and bounded by a character cap.
 """
 
 import os
@@ -95,6 +100,22 @@ CASES = (
             "newsletter signup copy": "Sign up for breaking news",
             "author biography": "Harry is a Senior Reviews Writer",
             "comment system notice": "confirm your public display name",
+        },
+    },
+    {
+        # The Verge has no #article-body and ships build-hashed class names, so
+        # only the visible wording identifies its widgets.
+        "fixture": "theverge-review.html",
+        "url": "https://www.theverge.com/tech/998566/beats-360-headphones-review",
+        "keep": {
+            "opening paragraph": "Everyone has seen someone at the gym",
+            "verdict paragraph": "For those who cannot abide earbuds",
+            "pros list item": "Beats’ first IP-rated headphones",
+        },
+        "drop": {
+            "score badge": "Verge Score",
+            "follow topics widget": "Follow topics and authors",
+            "follow topics copy": "personalized homepage feed",
         },
     },
 )
