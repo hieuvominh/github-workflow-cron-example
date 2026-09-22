@@ -63,7 +63,7 @@ slug and publication time. The source publication date is context only and is no
 
 - `MEDIA_REPO`
 - `MEDIA_BRANCH` (defaults to `main`)
-- `GEMINI_MODEL` (defaults to `gemini-3.6-flash`)
+- The GitHub Actions workflows prefer `gemini-2.5-flash` per API key and fall back to `gemini-3.6-flash` only when that key's project cannot access 2.5. The last successful key and each key's model preference are saved in GitHub Actions cache; no API key value is stored there.
 - `NEWS_FEED_URL`
 - `PHONES_FEED_URL`
 - `AI_FEED_URL`

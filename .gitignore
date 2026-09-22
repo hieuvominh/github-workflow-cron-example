@@ -1,4 +1,6 @@
 api_keys.txt
+.gemini-key-index
+.gemini-model-preferences.json
 .secrets/
 __pycache__/
 *.pyc

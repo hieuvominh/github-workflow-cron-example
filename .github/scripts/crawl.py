@@ -191,6 +191,9 @@ SOURCE_BLOCKED_IMAGE_CLASSES = {
         "endorsement-top-right",
     },
 }
+SOURCE_AUTHOR_IMAGE_LINK_HOSTS = {
+    "theverge.com",
+}
 SOURCE_BLOCKED_CONTENT_CLASSES = {
     "tomshardware.com": {
         "hawk-deal-widget-hero-main",
@@ -437,7 +440,7 @@ def non_editorial_identities(document, follow_nodes=()):
 
 
 def source_blocked_image_identities(document, article_url):
-    """Images inside publisher-specific promotional containers."""
+    """Images inside publisher-specific promotional or author containers."""
     host = urllib.parse.urlsplit(article_url).netloc.lower().split(":", 1)[0]
     blocked_classes = next(
         (
@@ -447,7 +450,11 @@ def source_blocked_image_identities(document, article_url):
         ),
         set(),
     )
-    if not blocked_classes:
+    is_author_link_source = any(
+        host == rule_host or host.endswith("." + rule_host)
+        for rule_host in SOURCE_AUTHOR_IMAGE_LINK_HOSTS
+    )
+    if not blocked_classes and not is_author_link_source:
         return set()
 
     blocked = set()
@@ -455,10 +462,17 @@ def source_blocked_image_identities(document, article_url):
         source = image_source(image)
         if not source:
             continue
-        if any(
+        inside_blocked_class = any(
             set((node.get("class") or "").lower().split()) & blocked_classes
             for node in image.iterancestors()
-        ) or set((image.get("class") or "").lower().split()) & blocked_classes:
+        ) or set((image.get("class") or "").lower().split()) & blocked_classes
+        linked_to_author = is_author_link_source and any(
+            urllib.parse.urlsplit((anchor.get("href") or "").strip()).path
+            .lower()
+            .startswith("/authors/")
+            for anchor in image.xpath("ancestor::a[@href]")
+        )
+        if inside_blocked_class or linked_to_author:
             blocked.add(
                 image_identity(urllib.parse.urljoin(article_url, source))
             )

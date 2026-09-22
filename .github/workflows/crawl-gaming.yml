@@ -24,6 +24,14 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+      - name: Restore Gemini key rotation
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .gemini-key-index
+            .gemini-model-preferences.json
+          key: gemini-key-index-${{ github.run_id }}
+          restore-keys: gemini-key-index-
       - name: Install article extractor
         run: python -m pip install --disable-pip-version-check trafilatura==2.2.0 google-genai pillow
       - name: Crawl and publish Gaming
@@ -41,5 +49,16 @@ jobs:
           MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
           MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_FALLBACK_MODEL: gemini-3.6-flash
+          GEMINI_KEY_INDEX_FILE: .gemini-key-index
+          GEMINI_MODEL_PREFERENCE_FILE: .gemini-model-preferences.json
         run: python .github/scripts/crawl.py
+      - name: Save Gemini key rotation
+        if: always() && hashFiles('.gemini-key-index', '.gemini-model-preferences.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .gemini-key-index
+            .gemini-model-preferences.json
+          key: gemini-key-index-${{ github.run_id }}

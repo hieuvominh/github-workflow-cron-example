@@ -8,7 +8,8 @@ from google import genai
 from google.genai import types
 
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+PREFERRED_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
 MAX_INPUT_CHARS = int(os.environ.get("GEMINI_MAX_INPUT_CHARS", "60000"))
 CONTENT_TYPE_LOCK = os.environ.get("CONTENT_TYPE_LOCK", "").strip()
 DYNAMIC_PRIMARY_CATEGORY = (
@@ -16,6 +17,9 @@ DYNAMIC_PRIMARY_CATEGORY = (
 )
 _current_key_index = 0
 _disabled_key_indexes = set()
+_key_index_loaded = False
+_model_preferences = {}
+_model_preferences_loaded = False
 
 SEO_TITLE_MIN = 20
 SEO_TITLE_MAX = 65
@@ -389,6 +393,19 @@ def _is_transient_model_error(error):
     )
 
 
+def _is_model_access_error(error):
+    message = str(error).lower()
+    return "404" in message and "model" in message and any(
+        marker in message
+        for marker in (
+            "no longer available",
+            "not available",
+            "not found",
+            "not supported",
+        )
+    )
+
+
 def _source_blocks(blocks):
     source = []
     character_count = 0
@@ -663,15 +680,101 @@ def _validation_failed(validation):
     return bool(_blocking_findings(validation))
 
 
+def _load_key_index(total_keys):
+    global _current_key_index, _key_index_loaded
+
+    if not total_keys:
+        raise RuntimeError("No Gemini API keys are configured")
+    if not _key_index_loaded:
+        _key_index_loaded = True
+        key_index_file = os.environ.get("GEMINI_KEY_INDEX_FILE", "").strip()
+        if key_index_file:
+            try:
+                saved_index = int(Path(key_index_file).read_text(encoding="utf-8").strip())
+                _current_key_index = saved_index % total_keys
+                print(f"    Resuming Gemini key rotation from key {_current_key_index + 1}")
+            except (OSError, ValueError):
+                pass
+    _current_key_index %= total_keys
+    return _current_key_index
+
+
+def _save_key_index(key_index, total_keys):
+    global _current_key_index
+
+    _current_key_index = key_index % total_keys
+    key_index_file = os.environ.get("GEMINI_KEY_INDEX_FILE", "").strip()
+    if not key_index_file:
+        return
+    try:
+        path = Path(key_index_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{_current_key_index}\n", encoding="utf-8")
+    except OSError as error:
+        print(f"    Could not save Gemini key rotation index: {error}")
+
+
+def _load_model_preferences(total_keys):
+    global _model_preferences_loaded
+
+    if _model_preferences_loaded:
+        return
+    _model_preferences_loaded = True
+    preference_file = os.environ.get("GEMINI_MODEL_PREFERENCE_FILE", "").strip()
+    if not preference_file:
+        return
+    try:
+        saved_preferences = json.loads(
+            Path(preference_file).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return
+    if not isinstance(saved_preferences, dict):
+        return
+    for raw_index, model_name in saved_preferences.items():
+        try:
+            key_index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        if (
+            0 <= key_index < total_keys
+            and model_name == FALLBACK_MODEL
+            and FALLBACK_MODEL != PREFERRED_MODEL
+        ):
+            _model_preferences[key_index] = model_name
+
+
+def _save_model_preference(key_index, model_name):
+    _model_preferences[key_index] = model_name
+    preference_file = os.environ.get("GEMINI_MODEL_PREFERENCE_FILE", "").strip()
+    if not preference_file:
+        return
+    try:
+        path = Path(preference_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {str(index): model for index, model in _model_preferences.items()},
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError as error:
+        print(f"    Could not save Gemini model preference: {error}")
+
+
 def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, temperature=0.35):
     global _current_key_index
 
     errors = []
     total_keys = len(api_keys)
+    start_index = _load_key_index(total_keys)
+    _load_model_preferences(total_keys)
     available_indexes = [
-        (_current_key_index + offset) % total_keys
+        (start_index + offset) % total_keys
         for offset in range(total_keys)
-        if (_current_key_index + offset) % total_keys
+        if (start_index + offset) % total_keys
         not in _disabled_key_indexes
     ]
 
@@ -681,44 +784,73 @@ def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, te
     for key_index in available_indexes:
         api_key = api_keys[key_index]
         client = genai.Client(api_key=api_key)
-        for attempt in range(1, 4):
-            try:
-                response = client.models.generate_content(
-                    model=MODEL,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=response_schema,
-                        automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                            disable=True
+        selected_model = _model_preferences.get(key_index, PREFERRED_MODEL)
+        if selected_model != PREFERRED_MODEL:
+            print(
+                f"    Using cached Gemini model {selected_model} "
+                f"for key {key_index + 1}"
+            )
+        model_candidates = [selected_model]
+        if selected_model == PREFERRED_MODEL and FALLBACK_MODEL != PREFERRED_MODEL:
+            model_candidates.append(FALLBACK_MODEL)
+
+        rotate_key = False
+        for model_name in model_candidates:
+            for attempt in range(1, 4):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=response_schema,
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                                disable=True
+                            ),
+                            max_output_tokens=65536,
+                            temperature=temperature,
                         ),
-                        max_output_tokens=65536,
-                        temperature=temperature,
-                    ),
-                )
-                if not response.text:
-                    raise RuntimeError("Gemini returned an empty response")
-                _current_key_index = key_index
-                return json.loads(response.text)
-            except Exception as error:
-                transient = _is_transient_model_error(error)
-                if transient and attempt < 3:
-                    delay = 2 ** attempt
-                    print(
-                        f"    Gemini temporary error on key {key_index + 1} "
-                        f"(attempt {attempt}/3); retrying in {delay}s"
                     )
-                    time.sleep(delay)
-                    continue
-                errors.append(f"key {key_index + 1}: {type(error).__name__}")
-                if not (_is_rotatable_error(error) or transient):
-                    raise
-                _disabled_key_indexes.add(key_index)
-                _current_key_index = (key_index + 1) % total_keys
-                print(
-                    f"    Gemini key {key_index + 1} exhausted or unavailable; "
-                    "disabled for this run and rotating to the next key"
-                )
+                    if not response.text:
+                        raise RuntimeError("Gemini returned an empty response")
+                    _save_key_index(key_index, total_keys)
+                    return json.loads(response.text)
+                except Exception as error:
+                    if (
+                        model_name == PREFERRED_MODEL
+                        and FALLBACK_MODEL != PREFERRED_MODEL
+                        and _is_model_access_error(error)
+                    ):
+                        _save_model_preference(key_index, FALLBACK_MODEL)
+                        print(
+                            f"    Gemini key {key_index + 1} cannot use "
+                            f"{PREFERRED_MODEL}; switching this key to {FALLBACK_MODEL}"
+                        )
+                        break
+
+                    transient = _is_transient_model_error(error)
+                    if transient and attempt < 3:
+                        delay = 2 ** attempt
+                        print(
+                            f"    Gemini temporary error on key {key_index + 1} "
+                            f"(attempt {attempt}/3); retrying in {delay}s"
+                        )
+                        time.sleep(delay)
+                        continue
+                    errors.append(
+                        f"key {key_index + 1} ({model_name}): {type(error).__name__}"
+                    )
+                    if not (_is_rotatable_error(error) or transient):
+                        raise
+                    _disabled_key_indexes.add(key_index)
+                    _save_key_index(key_index + 1, total_keys)
+                    print(
+                        f"    Gemini key {key_index + 1} exhausted or unavailable; "
+                        "disabled for this run and rotating to the next key"
+                    )
+                    rotate_key = True
+                    break
+            if rotate_key:
                 break
     raise RuntimeError("All Gemini keys failed (" + ", ".join(errors) + ")")
 
