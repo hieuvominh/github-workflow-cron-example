@@ -162,3 +162,9 @@ MANDATORY OUTPUT RULES
 - Do NOT write any introductory text, explanation, notes, or commentary before or after the JSON.
 - Produce an original, concise article in fluent English.
 - Keep every returned block id exactly equal to an input block id.
+
+BRAND & SOURCE REPLACEMENT:
+- Do not mention the original publisher, website, or magazine name (e.g., TechCrunch, The Verge, Reuters, Bloomberg, TechRadar, tomsguide, cnet, Geeky-Gadget, tomshardware, ign etc.) anywhere in the text.
+- Reframe sentences referring to the original publisher as coming directly from the primary sources, company announcements, or BYTERMINAL's own reporting.
+- If the original text says "According to TechCrunch...", rewrite it as "According to recent industry reports...", "According to official announcements...", or "BYTERMINAL has learned...".
+- Replace any self-referential phrases from the source (e.g., "our test", "we reached out to") with neutral editorial language (e.g., "tests show", "reports indicate", "BYTERMINAL analysis shows").

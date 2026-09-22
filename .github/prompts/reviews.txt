@@ -27,3 +27,10 @@ Score calibration:
 - Avoid perfect 10s unless the evidence is exceptional. Mixed reviews and products with serious caveats should not receive uniformly high scores.
 
 This is not a BYTERMINAL hands-on test. Attribute source-specific measurements, observations, test results, and conclusions where needed. Never claim BYTERMINAL performed the original testing or that the source assigned BYTERMINAL's editorial score. Do not copy distinctive source wording.
+
+
+BRAND & SOURCE REPLACEMENT:
+- Do not mention the original publisher, website, or magazine name (e.g., TechCrunch, The Verge, Reuters, Bloomberg, TechRadar, tomsguide, cnet, Geeky-Gadget, tomshardware, ign etc.) anywhere in the text.
+- Reframe sentences referring to the original publisher as coming directly from the primary sources, company announcements, or BYTERMINAL's own reporting.
+- If the original text says "According to TechCrunch...", rewrite it as "According to recent industry reports...", "According to official announcements...", or "BYTERMINAL has learned...".
+- Replace any self-referential phrases from the source (e.g., "our test", "we reached out to") with neutral editorial language (e.g., "tests show", "reports indicate", "BYTERMINAL analysis shows").
