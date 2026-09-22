@@ -2,10 +2,10 @@
 
 Run with: python .github/scripts/test_article_scope.py
 
-Both fixtures are real pages with <script>, <style>, <svg> and <template>
+The fixtures are real pages with <script>, <style>, <svg> and <template>
 stripped out, which keeps them committable without changing the DOM the
 extractor sees. They cover the two ways non-content reaches the rewriter on a
-Future plc template.
+Future plc template, across the three of its sites the workflows crawl.
 
 Around the body: <article> also wraps the author bio slice and the XenForo
 comment list. trafilatura keeps both, and its include_comments=False switch
@@ -13,9 +13,10 @@ does not help -- it only recognises its own COMMENTS_XPATH, and
 ul.xenforo-comments-list is not in it, so the replies arrive inside <main> as a
 <list> and reach the rewriter as article paragraphs.
 
-Inside the body: #article-body itself holds an injected newsletter form, inline
-"read more" cards and, on Tom's Guide, a closing "More from Tom's Guide" link
-rail whose only signal is its heading.
+Inside the body: #article-body itself holds an injected newsletter form and
+inline "read more" cards. Tom's Guide closes with a "More from Tom's Guide"
+rail whose only signal is its heading, and TechRadar with a classless <ul>
+naming its reviews guarantee, identified only by the policy link inside it.
 """
 
 import os
@@ -76,6 +77,24 @@ CASES = (
             "More from rail heading": "More from Tom's Guide",
             "More from rail link": "I interviewed Apple CEO John Ternus",
             "More from rail link (watch)": "always-listening",
+        },
+    },
+    {
+        # TechRadar signs a review off with a bare <ul> that has no class and
+        # follows no heading; only its link to the testing policy names it.
+        "fixture": "techradar-review.html",
+        "url": "https://www.techradar.com/televisions/soundbars/sonos-beam-ultra-review",
+        "keep": {
+            "opening paragraph": "The Sonos Beam Ultra doesn",
+            "how I tested section": "How I tested the Sonos Beam Ultra",
+            "closing test paragraph": "I also compared the Sonos Beam Ultra directly",
+        },
+        "drop": {
+            "reviews guarantee link": "reviews guarantee",
+            "first reviewed stamp": "First reviewed",
+            "newsletter signup copy": "Sign up for breaking news",
+            "author biography": "Harry is a Senior Reviews Writer",
+            "comment system notice": "confirm your public display name",
         },
     },
 )

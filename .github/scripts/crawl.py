@@ -168,6 +168,14 @@ LINK_SECTION_HEADINGS = (
 )
 LINK_SECTION_HEADING_MAX_CHARS = 60
 HEADING_TAG = re.compile(r"h[1-6]")
+EDITORIAL_POLICY_LINK_PARTS = (
+    "/how-we-test",
+    "/how-we-review",
+    "/reviews-guarantee",
+    "/editorial-standards",
+)
+SIGN_OFF_LIST_MAX_ITEMS = 4
+SIGN_OFF_ITEM_MAX_CHARS = 160
 SOURCE_BLOCKED_IMAGE_CLASSES = {
     "tomshardware.com": {
         "endorsement-hero-image",
@@ -561,6 +569,40 @@ def remove_link_sections(scope):
     return removed
 
 
+def remove_review_sign_off(scope):
+    """Drop the reviews-guarantee block a review closes with.
+
+    TechRadar ends a review with a bare <ul> holding "Read TechRadar's reviews
+    guarantee" and "First reviewed: September 2026". It is the last child of
+    #article-body, carries no class and follows no heading, so neither scoping
+    nor the heading rule reaches it. The link to the publisher's testing policy
+    is what identifies the block, and the whole short list goes with it, since
+    the date line is the same sign-off rather than article copy.
+    """
+    removed = 0
+    for link in scope.xpath(".//a[@href]"):
+        path = urllib.parse.urlsplit((link.get("href") or "").lower()).path
+        if not any(part in path for part in EDITORIAL_POLICY_LINK_PARTS):
+            continue
+        target = None
+        containers = link.xpath("(ancestor::ul|ancestor::ol)[last()]")
+        if containers:
+            items = containers[0].xpath("./li")
+            if items and len(items) <= SIGN_OFF_LIST_MAX_ITEMS and all(
+                len(element_text(item)) <= SIGN_OFF_ITEM_MAX_CHARS
+                for item in items
+            ):
+                target = containers[0]
+        if target is None:
+            own_item = link.xpath("ancestor::li[1]")
+            target = own_item[0] if own_item else link
+        parent = target.getparent()
+        if parent is not None:
+            parent.remove(target)
+            removed += 1
+    return removed
+
+
 def isolate_article_body(document, body):
     """Empty the page around the article container, in place.
 
@@ -602,7 +644,9 @@ def prepare_article_html(downloaded):
 
     body = article_body_node(document)
     removed = prune_non_editorial_nodes(document, body)
-    removed += remove_link_sections(body if body is not None else document)
+    scope = body if body is not None else document
+    removed += remove_link_sections(scope)
+    removed += remove_review_sign_off(scope)
     if removed:
         print(f"    Pruned {removed} non-editorial container(s)")
 
