@@ -86,6 +86,22 @@ CASES = (
         },
     },
     {
+        # Tom's Guide deal pages mix a Quick Links nav and Hawk affiliate
+        # cards into the downloaded page, including inside the article body.
+        "fixture": "tomsguide-deals.html",
+        "url": "https://www.tomsguide.com/phones/iphones/how-to-save-up-to-usd885-on-the-new-iphone-duo",
+        "keep": {
+            "article copy": "Apple is offering up to $885 in trade-in credit",
+            "editorial pricing context": "The iPhone Duo starts at $1,299",
+        },
+        "drop": {
+            "quick links navigation": "Quick Links",
+            "affiliate widget and retailer CTA": "VIEW DEAL",
+            "affiliate retailer copy": "Verizon is waiving activation",
+            "shop more deals section": "Shop more deals",
+        },
+    },
+    {
         # TechRadar signs a review off with a bare <ul> that has no class and
         # follows no heading; only its link to the testing policy names it.
         "fixture": "techradar-review.html",

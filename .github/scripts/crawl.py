@@ -165,6 +165,7 @@ LINK_SECTION_HEADINGS = (
     "see also",
     "you may also like",
     "you might also like",
+    "shop more deals",
 )
 LINK_SECTION_HEADING_MAX_CHARS = 60
 HEADING_TAG = re.compile(r"h[1-6]")
@@ -198,6 +199,22 @@ SOURCE_BLOCKED_CONTENT_CLASSES = {
     "tomshardware.com": {
         "hawk-deal-widget-hero-main",
     },
+    "tomsguide.com": {
+        "hawk-deal-widget-main",
+        "hawk-deal-widget-wrap",
+        "hawk-deal-widget-footer",
+        "hawk-affiliate-link-deal-widget",
+        "hawk-affiliate-link-deal-button",
+        "ecom-root",
+        "tg-df-widget-host",
+    },
+}
+SOURCE_BLOCKED_CONTENT_XPATHS = {
+    "tomsguide.com": (
+        '//*[@data-component-name="Article:JumpTo"]',
+        '//*[@data-widget-type="deal"]',
+        '//*[@id="sticky-nav--inline" or @id="nav-quick-links"]',
+    ),
 }
 FOLLOW_LINK_HOSTS = (
     "news.google.com",
@@ -490,7 +507,15 @@ def remove_source_blocked_content(downloaded, article_url):
         ),
         set(),
     )
-    if not blocked_classes:
+    blocked_xpaths = next(
+        (
+            selectors
+            for rule_host, selectors in SOURCE_BLOCKED_CONTENT_XPATHS.items()
+            if host == rule_host or host.endswith("." + rule_host)
+        ),
+        (),
+    )
+    if not blocked_classes and not blocked_xpaths:
         return downloaded
 
     try:
@@ -499,9 +524,20 @@ def remove_source_blocked_content(downloaded, article_url):
         return downloaded
 
     removed = 0
+    blocked_nodes = set()
+    for selector in blocked_xpaths:
+        blocked_nodes.update(document.xpath(selector))
     for node in document.xpath("//*[@class]"):
         node_classes = set((node.get("class") or "").lower().split())
-        if not node_classes & blocked_classes:
+        if node_classes & blocked_classes:
+            blocked_nodes.add(node)
+    for node in sorted(
+        blocked_nodes,
+        key=lambda item: len(list(item.iterancestors())),
+    ):
+        if node.getparent() is None or any(
+            ancestor in blocked_nodes for ancestor in node.iterancestors()
+        ):
             continue
         parent = node.getparent()
         if parent is not None:
