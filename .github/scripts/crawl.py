@@ -208,6 +208,17 @@ SOURCE_BLOCKED_CONTENT_CLASSES = {
         "ecom-root",
         "tg-df-widget-host",
     },
+    "techguide.com.au": {
+        "author-box",
+        "author-info",
+        "post-author",
+        "post-meta-items",
+        "has-author-img",
+        "post-share-bot",
+        "post-share-float",
+        "related-posts",
+        "the-post-tags",
+    },
 }
 SOURCE_BLOCKED_CONTENT_XPATHS = {
     "tomsguide.com": (
@@ -528,7 +539,17 @@ def remove_source_blocked_content(downloaded, article_url):
     for selector in blocked_xpaths:
         blocked_nodes.update(document.xpath(selector))
     for node in document.xpath("//*[@class]"):
-        node_classes = set((node.get("class") or "").lower().split())
+        class_value = node.get("class") or ""
+        node_classes = set(class_value.lower().split())
+        if (
+            (host == "techguide.com.au" or host.endswith(".techguide.com.au"))
+            and {"post-content-wrap", "has-share-float"}.issubset(node_classes)
+        ):
+            node.set(
+                "class",
+                " ".join(token for token in class_value.split() if token != "has-share-float"),
+            )
+            node_classes.discard("has-share-float")
         if node_classes & blocked_classes:
             blocked_nodes.add(node)
     for node in sorted(

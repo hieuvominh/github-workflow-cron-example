@@ -120,6 +120,22 @@ CASES = (
         },
     },
     {
+        # Tech Guide puts author/share modules and related-post rails around
+        # an otherwise extractable product review.
+        "fixture": "techguide-review.html",
+        "url": "https://www.techguide.com.au/reviews/computers-reviews/hp-omnibook-ultra-14-review/",
+        "keep": {
+            "article copy": "HP OmniBook Ultra is a superb all-rounder laptop",
+        },
+        "keep_images": {"product image": "HP-OmniBook-review.jpg"},
+        "drop": {
+            "author biography": "Stephen is the Tech Guide editor",
+            "byline": "By Stephen Fenech",
+            "share controls": "Facebook Twitter Pinterest LinkedIn",
+            "related posts": "Related Posts",
+        },
+    },
+    {
         # The Verge has no #article-body and ships build-hashed class names, so
         # only the visible wording identifies its widgets.
         "fixture": "theverge-review.html",
@@ -140,6 +156,9 @@ CASES = (
 # Live regression inputs for the end-to-end Gemini cleanup step. These are
 # opt-in because source HTML changes and publishers may rate-limit downloads.
 LIVE_CLEANUP_CASES = (
+    ("Tech Guide product review", "https://www.techguide.com.au/reviews/computers-reviews/hp-omnibook-ultra-14-review-the-allrounder-laptop-for-work-play-and-entertainment/"),
+    ("Tech Guide phone review", "https://www.techguide.com.au/reviews/mobiles-reviews/samsung-galaxy-z-fold8-ultra-review-sets-the-bar-for-flagship-foldable-smartphones/"),
+    ("Tech Guide audio review", "https://www.techguide.com.au/reviews/audio-reviews/noble-audio-fokus-apollo-pro-wireless-headphones-review-luxury-design-and-audio-quality/"),
     ("Tom's Guide UI / off-topic deals", "https://www.tomsguide.com/phones/iphones/how-to-save-up-to-usd885-on-the-new-iphone-duo"),
     ("The Verge mixed-topic contamination", "https://www.theverge.com/gadgets/998824/apple-magic-keyboard-touch-interstellar-4k-blu-ray-deal-sale"),
     ("Tom's Hardware image-heavy deal", "https://www.tomshardware.com/pc-components/gpus/get-this-spiffy-stealthy-msi-rtx-5090-for-just-usd4-299-geforce-week-at-walmart-serves-up-a-rare-deal-on-nvidias-fastest-gaming-gpu"),
@@ -200,6 +219,11 @@ def check(case):
         for block in blocks
         if block.get("type") in ("paragraph", "heading")
     )
+    image_details = "\n".join(
+        " ".join(str(block.get(key, "")) for key in ("source", "alt", "caption"))
+        for block in blocks
+        if block.get("type") == "pending_image"
+    )
 
     print(f"{case['fixture']}: {len(blocks)} block(s) extracted")
     for index, block in enumerate(blocks):
@@ -216,6 +240,14 @@ def check(case):
         f"LEAKED non-content: {label}"
         for label, needle in case["drop"].items()
         if needle in text
+    ] + [
+        f"MISSING relevant image: {label}"
+        for label, needle in case.get("keep_images", {}).items()
+        if needle.lower() not in image_details.lower()
+    ] + [
+        f"LEAKED irrelevant image: {label}"
+        for label, needle in case.get("drop_images", {}).items()
+        if needle.lower() in image_details.lower()
     ]
 
 
