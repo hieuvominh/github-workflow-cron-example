@@ -9,7 +9,14 @@ from google.genai import types
 
 
 PREFERRED_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
+_raw_fallback_models = os.environ.get(
+    "GEMINI_FALLBACK_MODELS",
+    os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite"),
+)
+FALLBACK_MODELS = tuple(
+    dict.fromkeys(model.strip() for model in _raw_fallback_models.split(",") if model.strip())
+)
+FALLBACK_MODEL = FALLBACK_MODELS[0] if FALLBACK_MODELS else PREFERRED_MODEL
 MAX_INPUT_CHARS = int(os.environ.get("GEMINI_MAX_INPUT_CHARS", "60000"))
 CONTENT_TYPE_LOCK = os.environ.get("CONTENT_TYPE_LOCK", "").strip()
 DYNAMIC_PRIMARY_CATEGORY = (
@@ -369,7 +376,7 @@ def _source_specific_instruction(source_url):
     return "Remove all source-site navigation, promotions, subscriptions, related content and interface copy."
 
 
-def _is_rotatable_error(error):
+def _is_rate_limit_error(error):
     message = str(error).lower()
     return any(
         marker in message
@@ -379,6 +386,17 @@ def _is_rotatable_error(error):
             "quota",
             "rate limit",
             "rate_limit",
+            "too many requests",
+            "too_many_requests",
+        )
+    )
+
+
+def _is_rotatable_error(error):
+    message = str(error).lower()
+    return _is_rate_limit_error(error) or any(
+        marker in message
+        for marker in (
             "401",
             "403",
             "unauthenticated",
@@ -767,8 +785,8 @@ def _load_model_preferences(total_keys):
             continue
         if (
             0 <= key_index < total_keys
-            and model_name == FALLBACK_MODEL
-            and FALLBACK_MODEL != PREFERRED_MODEL
+            and model_name in FALLBACK_MODELS
+            and model_name != PREFERRED_MODEL
         ):
             _model_preferences[key_index] = model_name
 
@@ -819,12 +837,13 @@ def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, te
                 f"    Using cached Gemini model {selected_model} "
                 f"for key {key_index + 1}"
             )
-        model_candidates = [selected_model]
-        if selected_model == PREFERRED_MODEL and FALLBACK_MODEL != PREFERRED_MODEL:
-            model_candidates.append(FALLBACK_MODEL)
-
+        model_candidates = list(
+            dict.fromkeys([selected_model, PREFERRED_MODEL, *FALLBACK_MODELS])
+        )
+        model_access_failed = selected_model != PREFERRED_MODEL
         rotate_key = False
         for model_name in model_candidates:
+            try_another_model = False
             for attempt in range(1, 4):
                 try:
                     response = client.models.generate_content(
@@ -843,25 +862,33 @@ def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, te
                     if not response.text:
                         raise RuntimeError("Gemini returned an empty response")
                     _save_key_index(key_index, total_keys)
+                    cached_model = (
+                        model_name
+                        if model_access_failed and model_name != PREFERRED_MODEL
+                        else PREFERRED_MODEL
+                    )
+                    _save_model_preference(key_index, cached_model)
                     return json.loads(response.text)
                 except Exception as error:
-                    if (
-                        model_name == PREFERRED_MODEL
-                        and FALLBACK_MODEL != PREFERRED_MODEL
-                        and _is_model_access_error(error)
-                    ):
-                        _save_model_preference(key_index, FALLBACK_MODEL)
-                        print(
-                            f"    Gemini key {key_index + 1} cannot use "
-                            f"{PREFERRED_MODEL}; switching this key to {FALLBACK_MODEL}"
+                    if _is_model_access_error(error):
+                        model_access_failed = True
+                        errors.append(
+                            f"key {key_index + 1} ({model_name}): model unavailable"
                         )
+                        print(
+                            f"    Gemini model {model_name} unavailable for key "
+                            f"{key_index + 1}; trying the next model"
+                        )
+                        try_another_model = True
                         break
 
                     transient = _is_transient_model_error(error)
-                    if transient and attempt < 3:
-                        delay = 2 ** attempt
+                    rate_limited = _is_rate_limit_error(error)
+                    if (transient or rate_limited) and attempt < 3:
+                        delay = 5 * (2 ** (attempt - 1)) if rate_limited else 2 ** attempt
                         print(
-                            f"    Gemini temporary error on key {key_index + 1} "
+                            f"    Gemini {'rate limit' if rate_limited else 'temporary error'} "
+                            f"on key {key_index + 1}, model {model_name} "
                             f"(attempt {attempt}/3); retrying in {delay}s"
                         )
                         time.sleep(delay)
@@ -869,18 +896,34 @@ def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, te
                     errors.append(
                         f"key {key_index + 1} ({model_name}): {type(error).__name__}"
                     )
-                    if not (_is_rotatable_error(error) or transient):
+                    if transient or rate_limited:
+                        print(
+                            f"    Gemini {model_name} still unavailable after retries; "
+                            "trying the next model"
+                        )
+                        try_another_model = True
+                        break
+                    if not _is_rotatable_error(error):
                         raise
-                    _disabled_key_indexes.add(key_index)
-                    _save_key_index(key_index + 1, total_keys)
-                    print(
-                        f"    Gemini key {key_index + 1} exhausted or unavailable; "
-                        "disabled for this run and rotating to the next key"
-                    )
                     rotate_key = True
                     break
             if rotate_key:
                 break
+            if not try_another_model and model_name == model_candidates[-1]:
+                break
+
+        _disabled_key_indexes.add(key_index)
+        _save_key_index(key_index + 1, total_keys)
+        if rotate_key:
+            print(
+                f"    Gemini key {key_index + 1} is invalid or unauthorized; "
+                "disabled for this run and rotating to the next key"
+            )
+        else:
+            print(
+                f"    All configured Gemini models failed for key {key_index + 1}; "
+                "disabled for this run and rotating to the next key"
+            )
     raise RuntimeError("All Gemini keys failed (" + ", ".join(errors) + ")")
 
 
