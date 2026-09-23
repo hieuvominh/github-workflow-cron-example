@@ -28,6 +28,7 @@ import os
 import pathlib
 import sys
 import types
+import argparse
 
 os.environ.setdefault("CATEGORY_SLUG", "computing")
 os.environ.setdefault("FEED_URLS", "https://example.invalid/feed")
@@ -120,6 +121,58 @@ CASES = (
     },
 )
 
+# Live regression inputs for the end-to-end Gemini cleanup step. These are
+# opt-in because source HTML changes and publishers may rate-limit downloads.
+LIVE_CLEANUP_CASES = (
+    ("Tom's Guide UI / off-topic deals", "https://www.tomsguide.com/phones/iphones/how-to-save-up-to-usd885-on-the-new-iphone-duo"),
+    ("The Verge mixed-topic contamination", "https://www.theverge.com/gadgets/998824/apple-magic-keyboard-touch-interstellar-4k-blu-ray-deal-sale"),
+    ("Tom's Hardware image-heavy deal", "https://www.tomshardware.com/pc-components/gpus/get-this-spiffy-stealthy-msi-rtx-5090-for-just-usd4-299-geforce-week-at-walmart-serves-up-a-rare-deal-on-nvidias-fastest-gaming-gpu"),
+    ("TechRadar image-heavy review", "https://www.techradar.com/home/robot-vacuums/eufy-omni-e35-review"),
+    ("Tom's Hardware image-heavy review", "https://www.tomshardware.com/peripherals/gaming-keyboards/glorious-gmmk-eternal-review"),
+    ("Tom's Hardware image-heavy review", "https://www.tomshardware.com/maker-stem/bambu-lab-r1-review"),
+    ("Tom's Guide image-heavy comparison", "https://www.tomsguide.com/phones/iphones/i-put-the-iphone-18-pro-max-vs-iphone-17-pro-max-through-a-7-round-face-off-heres-the-winner"),
+    ("The Verge image-heavy article", "https://www.theverge.com/tech/998272/peloton-tread-flex-fitness-treadmills"),
+    ("CNET image-heavy review", "https://www.cnet.com/home/smart-home/abode-starter-kit-review/"),
+)
+
+
+def check_live_cleanup_inputs():
+    """Smoke-test article fetching/extraction only; never calls Gemini or CMS."""
+    for label, article_url in LIVE_CLEANUP_CASES:
+        request = CRAWL["urllib"].request.Request(
+            article_url,
+            headers={
+                "User-Agent": CRAWL["BROWSER_USER_AGENT"],
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            },
+        )
+        try:
+            with CRAWL["urllib"].request.urlopen(
+                request,
+                timeout=15,
+                context=CRAWL["ARTICLE_SSL_CONTEXT"],
+            ) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                downloaded = response.read(CRAWL["ARTICLE_DOWNLOAD_MAX_BYTES"]).decode(
+                    charset, errors="replace"
+                )
+        except Exception as error:
+            print(f"UNAVAILABLE (not a cleanup failure): {label}: {error}", flush=True)
+            continue
+        prepared = CRAWL["remove_source_blocked_content"](downloaded, article_url)
+        blocks = CRAWL["extract_blocks"](prepared, article_url)
+        text_chars = sum(
+            len(block.get("text", ""))
+            for block in blocks
+            if block.get("type") in ("paragraph", "heading")
+        )
+        image_count = sum(block.get("type") == "pending_image" for block in blocks)
+        print(
+            f"INPUT READY: {label}: {text_chars} text chars, "
+            f"{image_count} candidate images — {article_url}",
+            flush=True,
+        )
+
 
 def check(case):
     downloaded = (SCRIPTS / "fixtures" / case["fixture"]).read_text(encoding="utf-8")
@@ -151,6 +204,17 @@ def check(case):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--live-cleanup-inputs",
+        action="store_true",
+        help="Fetch the supplied regression URLs and report extracted text/image inputs (no Gemini or publishing).",
+    )
+    args = parser.parse_args()
+    if args.live_cleanup_inputs:
+        check_live_cleanup_inputs()
+        return 0
+
     failures = []
     for case in CASES:
         for failure in check(case):

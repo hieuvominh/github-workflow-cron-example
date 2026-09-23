@@ -150,7 +150,7 @@ BLOCK REQUIREMENTS
 - Preserve reliable source heading levels. In raw_fallback mode, infer type and heading level from meaning and surrounding blocks.
 - Do not merge multiple input blocks into one output block.
 - Do not split one input block into multiple output blocks.
-- Every returned text value must be non-empty.
+- Every retained block must have non-empty text. A block marked drop=true may have empty text.
 
 MANDATORY OUTPUT RULES
 

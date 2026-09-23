@@ -155,7 +155,8 @@ BLOCK REQUIREMENTS
 - Preserve reliable source heading levels. In raw_fallback mode, infer type and heading level from meaning and surrounding blocks.
 - Do not merge multiple input blocks into one output block.
 - Do not split one input block into multiple output blocks.
-- Every returned text value must be non-empty.
+- Every retained block must have non-empty text. A block marked drop=true may have empty text.
+
 BRAND, SOURCE & AUTHOR REPLACEMENT:
 - Do not mention original publishers, websites, or magazines (e.g., TechCrunch, The Verge, TechRadar, Maximum PC, Tom's Hardware, CNET, IGN, etc.).
 - Remove individual author bios, personal career timelines, and self-referential backstory (e.g., "I worked at TechRadar for 8 years").

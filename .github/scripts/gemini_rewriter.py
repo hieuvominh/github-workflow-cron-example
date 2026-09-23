@@ -211,6 +211,17 @@ RESPONSE_SCHEMA = {
                 "required": ["id", "type", "level", "sectionHeading", "text", "drop"],
             },
         },
+        "images": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "keep": {"type": "boolean"},
+                },
+                "required": ["id", "keep"],
+            },
+        },
     },
     "required": [
         "title",
@@ -224,6 +235,7 @@ RESPONSE_SCHEMA = {
         "trending",
         "readingTime",
         "blocks",
+        "images",
     ],
 }
 
@@ -432,17 +444,29 @@ def _source_blocks(blocks):
 
 
 def _source_images(blocks):
-    return [
-        {
+    images = []
+    for block_id, block in enumerate(blocks):
+        if block.get("type") != "pending_image" or not block.get("source"):
+            continue
+        before = next(
+            (str(item.get("text", "")) for item in reversed(blocks[:block_id])
+             if item.get("type") in ("paragraph", "heading") and item.get("text")),
+            "",
+        )
+        after = next(
+            (str(item.get("text", "")) for item in blocks[block_id + 1:]
+             if item.get("type") in ("paragraph", "heading") and item.get("text")),
+            "",
+        )
+        images.append({
             "id": f"image_{block_id}",
             "position": block_id,
             "sourceUrl": block.get("source", ""),
             "alt": block.get("alt", ""),
             "caption": block.get("caption", ""),
-        }
-        for block_id, block in enumerate(blocks)
-        if block.get("type") == "pending_image" and block.get("source")
-    ]
+            "nearbyArticleText": [before[:500], after[:500]],
+        })
+    return images
 
 
 def _structured_input_is_reliable(source_blocks):
@@ -536,21 +560,25 @@ Category-specific editorial direction:
 
 Mandatory rules:
 - Produce an original, coherent article, not a sentence-by-sentence paraphrase.
+- Apply this cleanup policy to every source and category: remove navigation, menus, breadcrumbs, website UI; read-more/read-less, pagination, slide counters and gallery controls; newsletter, subscription, login, notification and app-install prompts; ads, sponsored content, affiliate widgets, price widgets, coupons and retailer modules; author bios, trust modules, copyright notices and publication boilerplate; related, recommended, trending and Most Popular sections; reader comments, forum reactions and unnecessary social posts; misplaced photo/image credits; duplicate paragraphs, repeated quotes, broken fragments, standalone labels and raw URLs; and sections about products, deals, events or topics unrelated to the title and primary subject. Keep relevant facts, context, criticism, specifications, pricing and comparisons. When unsure whether a block is relevant, remove it.
+- For every text block, set drop=true when it is contamination, duplicate, broken, or unrelated to the title and primary subject. This applies to all categories, not only reviews. Do not move removed material into another block.
+- Do not include the original publisher/site or author name in article fields; source credit is added separately by the publishing system.
+- Return exactly one image decision per input image in the images array, using its exact id and keep=true/false. Keep only images directly relevant to the primary subject and retained article content. Remove unrelated images, logos, icons, avatars, banners, ads, placeholders, decorative images, duplicates, responsive variants/repeated crops, unnecessary gallery images, and images from removed sections. When unsure, set keep=false.
 - Preserve verifiable names, dates, prices, specifications, qualifications and attributed conclusions.
 - Never invent facts, first-hand testing, measurements, quotes, images, links or source details.
 - Do not copy distinctive wording from the source.
 - Keep every returned block id exactly equal to an input block id.
-- Preserve the input block order and return one result per input block. Set drop=false for retained blocks. In the review workflow only, set drop=true for any non-editorial, redundant or source-identifying block defined below; its text may be empty.
+- Preserve the input block order and return one result per input block. Set drop=false for retained blocks and drop=true for removed blocks; its text may be empty.
 - Classify every text block as either a heading or a paragraph. Correct unreliable source labels when necessary.
 - Use level "h2" or "h3" for headings and "none" for paragraphs.
-- Create a navigable article structure without deleting useful product evidence. The review-only drop rule above removes surplus material that does not belong in the finished article. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable retained paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
+- Create a navigable article structure without deleting useful evidence. For articles with at least 6 text blocks, provide 2-5 concise sectionHeading values on suitable retained paragraph blocks. For shorter articles, provide at least 1. Use an empty string on all other blocks.
 - Do not add image placeholders.
 - title: accurate editorial headline, ideally 45-90 characters.
 - seoTitle: natural search title, ideally {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
 - excerpt: one or two complete sentences, ideally {EXCERPT_MIN}-{EXCERPT_MAX} characters, for cards and the article dek.
 - seoDescription: one complete factual sentence written independently rather than truncating the excerpt. Aim for {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters as an SEO recommendation, but clarity takes priority and text outside that range is allowed.
 - Every character range above is an editorial recommendation only. Never reject, omit or damage useful copy merely to hit a character count.
-- Check every generated field for source-site residue. Never output navigation, advertising, newsletter copy, subscription prompts, author biographies, trust modules, comments, account prompts, related/recommended stories, Most Popular modules, deal/price widgets or gallery controls.
+- Check every generated field for source-site residue using the global cleanup policy above.
 - Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
 - Source-specific cleanup: {source_rule}
 - Do not include Markdown fences or commentary outside the JSON response.
@@ -570,11 +598,12 @@ How the Writer works, so you do not misread its output:
 - The Writer rewrites the source block by block. Writer block N is meant to carry the same facts as Source block N, in the same order. That alignment is the required behaviour and is never a defect.
 - The Writer is required to strip newsletter copy, subscription and ticket prompts, deal or price widgets, event marketing, author biographies, trust modules, related or recommended stories and comment prompts. Detail missing for that reason is correct and is never a defect.
 - In reviews, a block with drop=true intentionally removes non-editorial, redundant or source-identifying material. Do not treat that removal as missing context or an unsupported claim.
+- In every category, drop=true intentionally removes contamination or content unrelated to the primary subject. Image decisions with keep=false intentionally remove irrelevant, decorative, duplicate or contamination images; do not treat these removals as missing content.
 - For reviews, overallScore and componentScores are BYTERMINAL editorial judgements inferred from the source's qualitative evidence. Their exact numbers usually will not appear in the source, and that is intentional.
 
 Block publication only on these two, and put each finding in the matching array:
 - unsupportedClaims: a factual statement in the Writer JSON the source does not support - an invented name, date, price, quote, link, first-hand test or measurement, or a factual number or date changed from the source. Review scores are the explicit exception described below.
-- remainingBoilerplate: source-site residue that survived into the Writer JSON - navigation, advertising, newsletter or subscription copy, author biography, reviewer credentials, testing-methodology sections, first-person testing voice, "First reviewed"/"Last updated" stamps, the original publisher/site/author name, trust modules, comments, related or recommended stories, Most Popular modules, deal or price widgets, or gallery controls. In reviews, any such residue in any output field is blocking; source credit is handled separately.
+- remainingBoilerplate: any contamination or off-topic material surviving in the Writer JSON - navigation, menus, breadcrumbs, website UI, read-more/read-less, pagination, slide counters/gallery controls, newsletter/subscription/login/notification/app prompts, ads/sponsored/affiliate/price/coupon/retailer modules, author bios/trust/copyright/publication boilerplate, related/recommended/trending/Most Popular sections, comments/forum reactions/unnecessary social posts, misplaced photo credits, duplicates/broken fragments/standalone labels/raw URLs, unrelated sections, original publisher/site/author names, or an image decision with keep=true for an unrelated, decorative, duplicate, responsive-variant, placeholder or removed-section image. Any such residue in any output field is blocking; source credit is handled separately.
 
 Review score policy:
 - Never put overallScore or componentScores in unsupportedClaims merely because the exact number is absent from the source.
@@ -1007,9 +1036,9 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             "type": block_type,
             "level": source_block.get("level", "h2") if block_type == "heading" else "none",
             "sectionHeading": "",
-            "drop": False,
+            "drop": True,
         }
-        print(f"    Gemini omitted block {block_id}; preserving source block")
+        print(f"    Gemini omitted block {block_id}; dropping unreviewed source block")
 
     inserted_ids = [
         block_id
@@ -1050,6 +1079,11 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     for heading in inserted_headings:
         print(f"      H(inserted): {heading}")
 
+    image_decisions = {
+        item.get("id"): item.get("keep") is True
+        for item in result.get("images", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
     rewritten_blocks = []
     for block_id, block in enumerate(blocks):
         if block_id in rewritten_by_id:
@@ -1080,6 +1114,14 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
                     }
                 )
         else:
+            if block.get("type") == "pending_image":
+                if image_decisions.get(f"image_{block_id}", False):
+                    rewritten_blocks.append(block)
+                else:
+                    print(
+                        f"    Gemini removed irrelevant or unapproved image at block {block_id}"
+                    )
+                continue
             rewritten_blocks.append(block)
 
     rewritten_title = str(result.get("title", "")).strip()

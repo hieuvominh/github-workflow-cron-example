@@ -8,7 +8,7 @@ CRITICAL JSON STRUCTURE RULES:
 - DO NOT merge the `blocks` array into one large `body` string. Preserve the array of blocks.
 - Preserve every supplied block ID and its exact original order.
 - Return `drop: false` for every retained block. For a block covered by the removal rules below, preserve its ID and position but return `drop: true`; do not move its text into another block.
-- Keep image placements intact; images are merged back into the rewritten blocks by the crawler.
+- Return one keep=true/false decision for every image. Retain only relevant images; when unsure, set keep=false. The crawler merges retained images back into the rewritten blocks.
 
 1. EDITORIAL & CATEGORY REQUIREMENTS:
 - Set `contentType` to: "review".
