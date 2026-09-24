@@ -484,6 +484,7 @@ def _source_images(blocks):
         images.append({
             "id": f"image_{block_id}",
             "position": block_id,
+            "isHero": block.get("isHero") is True,
             "sourceUrl": block.get("source", ""),
             "alt": block.get("alt", ""),
             "caption": block.get("caption", ""),
@@ -587,6 +588,7 @@ Mandatory rules:
 - For every text block, set drop=true when it is contamination, duplicate, broken, or unrelated to the title and primary subject. This applies to all categories, not only reviews. Do not move removed material into another block.
 - Do not include the original publisher/site or author name in article fields; source credit is added separately by the publishing system.
 - Return exactly one image decision per input image in the images array, using its exact id and keep=true/false. Keep only images directly relevant to the primary subject and retained article content. Remove unrelated images, logos, icons, avatars, banners, ads, placeholders, decorative images, duplicates, responsive variants/repeated crops, unnecessary gallery images, and images from removed sections. When unsure, set keep=false.
+- Preserve the publisher-designated lead image (`isHero=true`) when it depicts the article's primary subject. Do not reject it only because alt text is missing or its caption is a photo credit.
 - Preserve verifiable names, dates, prices, specifications, qualifications and attributed conclusions.
 - Never invent facts, first-hand testing, measurements, quotes, images, links or source details.
 - Do not copy distinctive wording from the source.
@@ -1177,7 +1179,14 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
                 )
         else:
             if block.get("type") == "pending_image":
-                if image_decisions.get(f"image_{block_id}", False):
+                if block.get("isHero") is True:
+                    if not image_decisions.get(f"image_{block_id}", False):
+                        print(
+                            f"    Gemini rejected publisher lead image at block {block_id}; "
+                            "retaining it as the article hero"
+                        )
+                    rewritten_blocks.append(block)
+                elif image_decisions.get(f"image_{block_id}", False):
                     rewritten_blocks.append(block)
                 else:
                     print(

@@ -128,6 +128,7 @@ CASES = (
             "article copy": "HP OmniBook Ultra is a superb all-rounder laptop",
         },
         "keep_images": {"product image": "HP-OmniBook-review.jpg"},
+        "require_hero": True,
         "drop": {
             "author biography": "Stephen is the Tech Guide editor",
             "byline": "By Stephen Fenech",
@@ -225,6 +226,10 @@ def check(case):
         for block in blocks
         if block.get("type") == "pending_image"
     )
+    has_hero = any(
+        block.get("type") == "pending_image" and block.get("isHero") is True
+        for block in blocks
+    )
 
     print(f"{case['fixture']}: {len(blocks)} block(s) extracted")
     for index, block in enumerate(blocks):
@@ -249,7 +254,11 @@ def check(case):
         f"LEAKED irrelevant image: {label}"
         for label, needle in case.get("drop_images", {}).items()
         if needle.lower() in image_details.lower()
-    ]
+    ] + (
+        ["MISSING publisher-designated hero image"]
+        if case.get("require_hero") and not has_hero
+        else []
+    )
 
 
 def main():

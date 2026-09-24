@@ -1031,6 +1031,7 @@ def extract_page_media(downloaded, article_url):
                 "source": absolute_source,
                 "alt": alt,
                 "caption": caption,
+                "isHero": True,
             }
     if not hero:
         for figure in document.xpath("//article//figure | //main//figure"):
@@ -1050,6 +1051,7 @@ def extract_page_media(downloaded, article_url):
                 "caption": decoded_text(
                     element_text(captions[0]) if captions else ""
                 )[:1_000],
+                "isHero": True,
             }
             break
     if not hero:
