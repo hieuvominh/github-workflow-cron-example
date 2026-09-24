@@ -137,6 +137,24 @@ CASES = (
         },
     },
     {
+        # Engadget's og:image uses an l-intro rendition while its <picture>
+        # supplies the accessible alt text on the matching upload ID.
+        "fixture": "engadget-hero.html",
+        "url": "https://www.engadget.com/2267210/meta-muse-ai-agent-smart-glasses/",
+        "keep": {
+            "article copy": "Meta's Muse AI agent can book travel and send emails",
+        },
+        "keep_images": {
+            "hero alt from responsive picture rendition": "A person wearing Meta AI glasses",
+        },
+        "require_hero": True,
+        "expected_image_count": 1,
+        "drop": {
+            "share controls": "Share this story",
+            "related-story card": "Related coverage",
+        },
+    },
+    {
         # The Verge has no #article-body and ships build-hashed class names, so
         # only the visible wording identifies its widgets.
         "fixture": "theverge-review.html",
@@ -157,6 +175,7 @@ CASES = (
 # Live regression inputs for the end-to-end Gemini cleanup step. These are
 # opt-in because source HTML changes and publishers may rate-limit downloads.
 LIVE_CLEANUP_CASES = (
+    ("Engadget hero image extraction", "https://www.engadget.com/2267210/meta-muse-ai-agent-smart-glasses/"),
     ("TechCrunch hero image extraction", "https://techcrunch.com/2026/09/23/meta-made-a-tamagotchi-like-wearable-for-its-muse-ai-agent/"),
     ("Tech Guide product review", "https://www.techguide.com.au/reviews/computers-reviews/hp-omnibook-ultra-14-review-the-allrounder-laptop-for-work-play-and-entertainment/"),
     ("Tech Guide phone review", "https://www.techguide.com.au/reviews/mobiles-reviews/samsung-galaxy-z-fold8-ultra-review-sets-the-bar-for-flagship-foldable-smartphones/"),
@@ -230,6 +249,7 @@ def check(case):
         block.get("type") == "pending_image" and block.get("isHero") is True
         for block in blocks
     )
+    image_count = sum(block.get("type") == "pending_image" for block in blocks)
 
     print(f"{case['fixture']}: {len(blocks)} block(s) extracted")
     for index, block in enumerate(blocks):
@@ -257,6 +277,14 @@ def check(case):
     ] + (
         ["MISSING publisher-designated hero image"]
         if case.get("require_hero") and not has_hero
+        else []
+    ) + (
+        [
+            "UNEXPECTED image count: "
+            f"expected {case['expected_image_count']}, got {image_count}"
+        ]
+        if "expected_image_count" in case
+        and image_count != case["expected_image_count"]
         else []
     )
 

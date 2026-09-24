@@ -882,17 +882,26 @@ def hero_source_url(document):
 
 
 def hero_figure_details(document, identity):
-    """Recover alt text and caption by locating the hero inside the article."""
-    for figure in document.xpath("//article//figure | //main//figure | //figure"):
-        images = figure.xpath(".//img")
-        if not images:
+    """Recover lead-image details, including publisher resize variants."""
+    hero_upload_id = upload_id(identity)
+    images = document.xpath(
+        "//article//figure//img | //main//figure//img | //figure//img | "
+        "//article//img | //main//img"
+    )
+    for image in images:
+        source = image_source(image)
+        if not source:
             continue
-        source = image_source(images[0])
-        if not source or image_identity(source) != identity:
+        source_identity = image_identity(source)
+        source_upload_id = upload_id(source_identity)
+        if source_identity != identity and not (
+            hero_upload_id and source_upload_id == hero_upload_id
+        ):
             continue
-        captions = figure.xpath(".//figcaption")
+        figure = image.xpath("ancestor::figure[1]")
+        captions = figure[0].xpath(".//figcaption") if figure else []
         return (
-            decoded_text(images[0].get("alt"))[:500],
+            decoded_text(image.get("alt"))[:500],
             decoded_text(element_text(captions[0]) if captions else "")[:1_000],
         )
     return "", ""
@@ -1670,8 +1679,14 @@ def extract_blocks(downloaded, article_url):
     )
     blocks = []
     seen_image_sources = set(blocked)
+    seen_image_uploads = {
+        found for identity in seen_image_sources if (found := upload_id(identity))
+    }
     if hero:
-        seen_image_sources.add(image_identity(hero["source"]))
+        hero_identity = image_identity(hero["source"])
+        seen_image_sources.add(hero_identity)
+        if hero_upload_id := upload_id(hero_identity):
+            seen_image_uploads.add(hero_upload_id)
 
     def is_follow_copy(text):
         normalized = normalized_text(text)
@@ -1721,9 +1736,14 @@ def extract_blocks(downloaded, article_url):
             if source:
                 absolute_source = urllib.parse.urljoin(article_url, source)
                 identity = image_identity(absolute_source)
-                if identity in seen_image_sources:
+                image_upload_id = upload_id(identity)
+                if identity in seen_image_sources or (
+                    image_upload_id and image_upload_id in seen_image_uploads
+                ):
                     return
                 seen_image_sources.add(identity)
+                if image_upload_id:
+                    seen_image_uploads.add(image_upload_id)
                 blocks.append(
                     {
                         "type": "pending_image",
