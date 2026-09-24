@@ -156,6 +156,7 @@ CASES = (
 # Live regression inputs for the end-to-end Gemini cleanup step. These are
 # opt-in because source HTML changes and publishers may rate-limit downloads.
 LIVE_CLEANUP_CASES = (
+    ("TechCrunch hero image extraction", "https://techcrunch.com/2026/09/23/meta-made-a-tamagotchi-like-wearable-for-its-muse-ai-agent/"),
     ("Tech Guide product review", "https://www.techguide.com.au/reviews/computers-reviews/hp-omnibook-ultra-14-review-the-allrounder-laptop-for-work-play-and-entertainment/"),
     ("Tech Guide phone review", "https://www.techguide.com.au/reviews/mobiles-reviews/samsung-galaxy-z-fold8-ultra-review-sets-the-bar-for-flagship-foldable-smartphones/"),
     ("Tech Guide audio review", "https://www.techguide.com.au/reviews/audio-reviews/noble-audio-fokus-apollo-pro-wireless-headphones-review-luxury-design-and-audio-quality/"),
