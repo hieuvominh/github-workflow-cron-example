@@ -1529,7 +1529,11 @@ def upload_image(source_url, article_url):
         absolute_url,
         headers={"User-Agent": "BYTERMINALBot/0.1"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(
+        request,
+        timeout=30,
+        context=ARTICLE_SSL_CONTEXT,
+    ) as response:
         content_type = response.headers.get_content_type().lower()
         image_data = response.read(IMAGE_DOWNLOAD_MAX_BYTES + 1)
 
