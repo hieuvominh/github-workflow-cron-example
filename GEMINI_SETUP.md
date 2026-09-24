@@ -55,8 +55,10 @@ kept as optional custom prompt overrides:
 
 Set `CATEGORY_PROMPT_FILE` to use one of these files instead of the built-in direction.
 
-Gemini creates the display title, SEO title, excerpt, SEO description, taxonomy, article blocks and
-review fields. The crawler owns the source URL; BYTERMINAL derives the publisher, canonical URL,
+Gemini creates the display title, SEO title, excerpt, SEO description, SEO keyword phrases,
+taxonomy, article blocks and review fields. It aims for 3-10 useful keyword phrases, but keyword
+quantity never blocks publication. The crawler sends any generated phrases to the CMS as editorial
+SEO metadata. The crawler owns the source URL; BYTERMINAL derives the publisher, canonical URL,
 slug and publication time. The source publication date is context only and is not stored.
 
 ## Repository variables

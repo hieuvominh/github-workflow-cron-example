@@ -125,6 +125,11 @@ RESPONSE_SCHEMA = {
         "seoDescription": {
             "type": "string",
         },
+        "seoKeywords": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 10,
+        },
         "contentType": {
             "type": "string",
             "enum": ["review", "news", "guide", "opinion"],
@@ -595,6 +600,7 @@ Mandatory rules:
 - seoTitle: natural search title, ideally {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
 - excerpt: one or two complete sentences, ideally {EXCERPT_MIN}-{EXCERPT_MAX} characters, for cards and the article dek.
 - seoDescription: one complete factual sentence written independently rather than truncating the excerpt. Aim for {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters as an SEO recommendation, but clarity takes priority and text outside that range is allowed.
+- seoKeywords: aim for 3-10 distinct, natural search phrases that accurately describe the article, but return fewer when only fewer useful phrases are supported. Include the primary entity and search intent, prefer specific multi-word phrases over isolated generic words, and never include publisher names or unsupported claims. Keyword quantity must never block publication.
 - Every character range above is an editorial recommendation only. Never reject, omit or damage useful copy merely to hit a character count.
 - Check every generated field for source-site residue using the global cleanup policy above.
 - Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
@@ -660,13 +666,26 @@ Validator findings:
 """
 
 
+def _normalized_seo_keywords(result):
+    keywords = []
+    seen = set()
+    for item in result.get("seoKeywords") or []:
+        keyword = re.sub(r"\s+", " ", str(item)).strip()
+        key = keyword.casefold()
+        if 2 <= len(keyword) <= 100 and key not in seen:
+            seen.add(key)
+            keywords.append(keyword)
+    return keywords[:10]
+
+
 def _writer_contract_issues(result):
     required_fields = ("title", "seoTitle", "excerpt", "seoDescription")
-    return [
+    issues = [
         f"{field_name} must not be empty"
         for field_name in required_fields
         if not str(result.get(field_name, "")).strip()
     ]
+    return issues
 
 
 BLOCK_COMPARISON_NOISE = re.compile(
@@ -1171,6 +1190,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     seo_title = str(result.get("seoTitle", "")).strip()
     rewritten_excerpt = str(result.get("excerpt", "")).strip()
     seo_description = str(result.get("seoDescription", "")).strip()
+    seo_keywords = _normalized_seo_keywords(result)
     required_values = {
         "title": rewritten_title,
         "seoTitle": seo_title,
@@ -1180,7 +1200,6 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     missing_fields = [name for name, value in required_values.items() if not value]
     if missing_fields:
         raise RuntimeError("Gemini response is missing: " + ", ".join(missing_fields))
-
     content_type = str(result.get("contentType", "")).strip()
     if CONTENT_TYPE_LOCK and content_type != CONTENT_TYPE_LOCK:
         raise RuntimeError(
@@ -1190,6 +1209,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
     metadata = {
         "seoTitle": seo_title,
         "seoDescription": seo_description,
+        "seoKeywords": seo_keywords,
         "contentType": content_type,
         "secondaryCategorySlugs": list(dict.fromkeys(result["secondaryCategories"])),
         "tagSlugs": list(dict.fromkeys(result["tags"])),
