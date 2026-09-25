@@ -240,6 +240,7 @@ RESPONSE_SCHEMA = {
         "seoTitle",
         "excerpt",
         "seoDescription",
+        "seoKeywords",
         "contentType",
         "secondaryCategories",
         "tags",
@@ -602,7 +603,7 @@ Mandatory rules:
 - seoTitle: natural search title, ideally {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters; preserve the primary entity and topic.
 - excerpt: one or two complete sentences, ideally {EXCERPT_MIN}-{EXCERPT_MAX} characters, for cards and the article dek.
 - seoDescription: one complete factual sentence written independently rather than truncating the excerpt. Aim for {SEO_DESCRIPTION_MIN}-{SEO_DESCRIPTION_MAX} characters as an SEO recommendation, but clarity takes priority and text outside that range is allowed.
-- seoKeywords: aim for 3-10 distinct, natural search phrases that accurately describe the article, but return fewer when only fewer useful phrases are supported. Include the primary entity and search intent, prefer specific multi-word phrases over isolated generic words, and never include publisher names or unsupported claims. Keyword quantity must never block publication.
+- seoKeywords: required. Return 3-10 distinct, natural SEO search phrases accurately supported by the article. Include the primary entity, specific topic, and likely search intent; prefer useful multi-word phrases over generic single words. Never omit the field, return an empty list, use duplicates, include publisher names, or invent unsupported topics.
 - Every character range above is an editorial recommendation only. Never reject, omit or damage useful copy merely to hit a character count.
 - Check every generated field for source-site residue using the global cleanup policy above.
 - Never output phrases such as "Sign up for", "Why you can trust", "Join the conversation", "About the author", "Today's best deals", or equivalent source chrome.
@@ -687,6 +688,9 @@ def _writer_contract_issues(result):
         for field_name in required_fields
         if not str(result.get(field_name, "")).strip()
     ]
+    seo_keywords = _normalized_seo_keywords(result)
+    if len(seo_keywords) < 3:
+        issues.append("seoKeywords must contain at least 3 distinct, non-empty phrases")
     return issues
 
 

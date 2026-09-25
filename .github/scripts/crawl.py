@@ -196,6 +196,9 @@ SOURCE_AUTHOR_IMAGE_LINK_HOSTS = {
     "theverge.com",
 }
 SOURCE_BLOCKED_CONTENT_CLASSES = {
+    "cnet.com": {
+        "wp-block-ziff-davis-exco-video",
+    },
     "tomshardware.com": {
         "hawk-deal-widget-hero-main",
     },
@@ -569,10 +572,20 @@ def remove_source_blocked_content(downloaded, article_url):
     return lxml_html.tostring(document, encoding="unicode", method="html")
 
 
-def article_body_node(document):
+def article_body_node(document, article_url=None):
     """The container holding the editorial copy, when the template names one."""
     for xpath in ARTICLE_BODY_XPATHS:
         nodes = document.xpath(xpath)
+        if nodes:
+            return nodes[0]
+    host = urllib.parse.urlsplit(article_url or "").netloc.lower().split(":", 1)[0]
+    if host == "cnet.com" or host.endswith(".cnet.com"):
+        # CNET's WordPress detail pages keep the actual story in .entry-content;
+        # the outer <article> also includes author modules and recommendation rails.
+        nodes = document.xpath(
+            '//article//*[contains(concat(" ", normalize-space(@class), " "), '
+            '" entry-content ")]'
+        )
         if nodes:
             return nodes[0]
     return None
@@ -762,7 +775,7 @@ def isolate_article_body(document, body):
         node = parent
 
 
-def prepare_article_html(downloaded):
+def prepare_article_html(downloaded, article_url):
     """Split the page into the text trafilatura may read and the media context.
 
     Returns the pruned page, which still carries the hero figure and the social
@@ -776,7 +789,7 @@ def prepare_article_html(downloaded):
     except (TypeError, ValueError, lxml_html.etree.ParserError):
         return downloaded, None
 
-    body = article_body_node(document)
+    body = article_body_node(document, article_url)
     removed = prune_non_editorial_nodes(document, body)
     scope = body if body is not None else document
     removed += remove_link_sections(scope)
@@ -792,7 +805,7 @@ def prepare_article_html(downloaded):
         return page_html, None
 
     scoped = copy.deepcopy(document)
-    scoped_body = article_body_node(scoped)
+    scoped_body = article_body_node(scoped, article_url)
     if scoped_body is None:
         return page_html, None
     isolate_article_body(scoped, scoped_body)
@@ -966,7 +979,7 @@ def recoverable_images(document, article_url, blocked):
     from the page. It then still has to anchor onto a paragraph that survived
     extraction, which is enforced by add_page_media.
     """
-    body = article_body_node(document)
+    body = article_body_node(document, article_url)
     scopes = (
         [body]
         if body is not None
@@ -1651,7 +1664,7 @@ def fetch_article_html(article_url):
 
 
 def extract_blocks(downloaded, article_url):
-    page_html, body_html = prepare_article_html(downloaded)
+    page_html, body_html = prepare_article_html(downloaded, article_url)
     hero, videos, page_images, blocked, blocked_texts = extract_page_media(
         page_html, article_url
     )
@@ -1801,7 +1814,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     clean_text = "\n\n".join(text_blocks)
 
     if len(clean_text) < 200:
-        fallback_page, fallback_body = prepare_article_html(downloaded)
+        fallback_page, fallback_body = prepare_article_html(downloaded, article_url)
         fallback_text = trafilatura.extract(
             fallback_body or fallback_page,
             url=url,

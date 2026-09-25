@@ -170,11 +170,31 @@ CASES = (
             "follow topics copy": "personalized homepage feed",
         },
     },
+    {
+        # CNET detail pages use a WordPress .entry-content body and inject
+        # recommendation videos inside it; the author bio remains outside.
+        "fixture": "cnet-gaming.html",
+        "url": "https://www.cnet.com/tech/gaming/console-security-update/",
+        "keep": {
+            "opening article copy": "Owners of the original console should install",
+            "compatibility detail": "The newer console is not affected",
+            "recommended fix": "Installing the firmware update is the recommended fix",
+        },
+        "keep_images": {"publisher hero": "console-hero.jpg"},
+        "require_hero": True,
+        "expected_image_count": 1,
+        "drop": {
+            "injected More from CNET module": "More from CNET",
+            "related story": "An unrelated gaming story",
+            "author biography": "Author biography that must not become article copy",
+        },
+    },
 )
 
 # Live regression inputs for the end-to-end Gemini cleanup step. These are
 # opt-in because source HTML changes and publishers may rate-limit downloads.
 LIVE_CLEANUP_CASES = (
+    ("CNET gaming detail structure", "https://www.cnet.com/tech/gaming/nintendo-switch-exploit-fixable-with-update-2/"),
     ("Engadget hero image extraction", "https://www.engadget.com/2267210/meta-muse-ai-agent-smart-glasses/"),
     ("TechCrunch hero image extraction", "https://techcrunch.com/2026/09/23/meta-made-a-tamagotchi-like-wearable-for-its-muse-ai-agent/"),
     ("Tech Guide product review", "https://www.techguide.com.au/reviews/computers-reviews/hp-omnibook-ultra-14-review-the-allrounder-laptop-for-work-play-and-entertainment/"),

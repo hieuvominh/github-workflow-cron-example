@@ -38,7 +38,7 @@ jobs:
         env:
           CATEGORY_SLUG: gaming
           FEED_URLS: >-
-            ${{ inputs.feed_url || 'https://techcrunch.com/category/gaming/feed/,https://www.theverge.com/rss/games/index.xml,https://www.ign.com/rss/v2/articles/feed?categories=news' }}
+            ${{ inputs.feed_url || 'https://techcrunch.com/category/gaming/feed/,https://www.theverge.com/rss/games/index.xml,https://www.ign.com/rss/v2/articles/feed?categories=news,https://www.cnet.com/rss/gaming/' }}
           SOURCE_VERTICAL_RULES: "www.ign.com=games,ign.com=games"
           PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"

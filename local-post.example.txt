@@ -1,0 +1,18 @@
+Title: Example technology article
+Source URL: https://example.com/example-article
+Category: gadgets
+Hero image: https://example.com/hero-image.jpg | Example product | Product shown from the front
+---
+
+Write the supplied article content here as plain text. Separate paragraphs with a blank line.
+The text should contain the article's relevant facts, context, specifications, pricing, and
+comparisons. The local publisher checks that it is long enough and asks Gemini to rewrite it
+using the same editorial rules as the automated workflow.
+
+## Optional section heading
+
+Add more article content here. Inline images can be listed on their own line as:
+Image: https://example.com/detail-image.jpg | Detail view | Optional caption
+
+Or use Markdown image syntax:
+![Alt text](https://example.com/another-image.jpg "Optional caption")

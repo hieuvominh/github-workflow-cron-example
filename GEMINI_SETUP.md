@@ -29,6 +29,46 @@ separate keys with commas. `api_keys.txt` is ignored by Git.
 
 To use a different private file path, set `GEMINI_API_KEYS_FILE`.
 
+## Publish a prepared text file locally
+
+Use `.github/scripts/local_post.py` when you already have article text and want the
+normal Gemini cleanup/rewrite and Bytekora publishing flow without running a feed crawl.
+Start from [local-post.example.txt](local-post.example.txt). The header needs `Title:`,
+`Source URL:`, and a `Category:` (`ai`, `phones`, `computing`, `gadgets`, `gaming`,
+`guides`, `reviews`, or `news`), followed by a line containing `---`. Put the article
+text below it, separated into paragraphs with blank lines. Add one or more `Hero image:`
+headers or body `Image:` lines; each accepts `URL | alt text | caption`. Markdown image
+syntax is also accepted in the body. Full `http(s)` URLs are required.
+
+Install the local dependencies if needed:
+
+```powershell
+python -m pip install google-genai pillow certifi
+```
+
+Create `.secrets/local-post.env` (already ignored by Git) with the same local CMS and
+media settings used by the crawler:
+
+```text
+BYTEKORA_URL=https://your-bytekora-host
+BYTEKORA_INGEST_SECRET=your-ingest-secret
+MEDIA_REPO=owner/media-repository
+MEDIA_TOKEN=your-github-token
+MEDIA_BRANCH=main
+```
+
+Put Gemini keys in `api_keys.txt` as above. Run the script with a confirmation before
+it uploads images and publishes:
+
+```powershell
+python .github/scripts/local_post.py .\my-article.txt
+```
+
+`--dry-run` runs Gemini and displays the rewritten draft without image uploads or a
+CMS post. `--yes` skips the final confirmation prompt for deliberate non-interactive
+publishing. The script checks the source URL, image URLs and duplicate source URL before
+calling Gemini; duplicate drafts stop without using a Gemini key.
+
 ## Editorial prompts and validation
 
 The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It applies two layers:

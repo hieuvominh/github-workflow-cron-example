@@ -29,9 +29,9 @@ spec.loader.exec_module(rewriter)
 
 
 class GeminiSEOKeywordContractTests(unittest.TestCase):
-    def test_response_schema_accepts_up_to_ten_optional_keywords(self):
+    def test_response_schema_requires_keywords_and_caps_them_at_ten(self):
         keywords = rewriter.RESPONSE_SCHEMA["properties"]["seoKeywords"]
-        self.assertNotIn("seoKeywords", rewriter.RESPONSE_SCHEMA["required"])
+        self.assertIn("seoKeywords", rewriter.RESPONSE_SCHEMA["required"])
         self.assertNotIn("minItems", keywords)
         self.assertEqual(keywords["maxItems"], 10)
 
@@ -53,7 +53,21 @@ class GeminiSEOKeywordContractTests(unittest.TestCase):
             ],
         )
 
-    def test_contract_allows_fewer_than_three_distinct_keywords(self):
+    def test_contract_requires_three_distinct_keywords(self):
+        result = {
+            "title": "Title",
+            "seoTitle": "SEO title",
+            "excerpt": "Excerpt",
+            "seoDescription": "SEO description",
+            "seoKeywords": [
+                "AI laptops",
+                "AI laptop deals",
+                "AI laptop buying advice",
+            ],
+        }
+        self.assertEqual(rewriter._writer_contract_issues(result), [])
+
+    def test_contract_rejects_missing_or_too_few_keywords(self):
         result = {
             "title": "Title",
             "seoTitle": "SEO title",
@@ -61,7 +75,13 @@ class GeminiSEOKeywordContractTests(unittest.TestCase):
             "seoDescription": "SEO description",
             "seoKeywords": ["AI laptops", "ai laptops"],
         }
-        self.assertEqual(rewriter._writer_contract_issues(result), [])
+        self.assertTrue(
+            any("seoKeywords" in issue for issue in rewriter._writer_contract_issues(result))
+        )
+        del result["seoKeywords"]
+        self.assertTrue(
+            any("seoKeywords" in issue for issue in rewriter._writer_contract_issues(result))
+        )
 
 
 if __name__ == "__main__":
