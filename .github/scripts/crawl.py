@@ -1199,6 +1199,43 @@ def add_page_media(blocks, hero, videos, page_images=()):
     return blocks
 
 
+def separate_hero_image(blocks):
+    """Remove and return one uploaded image for use as the article hero.
+
+    Prefer the publisher-designated lead image. If the source did not expose a
+    lead image (or uploading it failed), promote the first successfully uploaded
+    article image instead. Transient crawler metadata never reaches the CMS.
+    """
+    hero_index = next(
+        (
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "image" and block.get("isHero") is True
+        ),
+        None,
+    )
+    if hero_index is None:
+        hero_index = next(
+            (
+                index
+                for index, block in enumerate(blocks)
+                if block.get("type") == "image"
+            ),
+            None,
+        )
+
+    hero = None
+    body = []
+    for index, block in enumerate(blocks):
+        cleaned = dict(block)
+        cleaned.pop("isHero", None)
+        if index == hero_index:
+            hero = cleaned
+        else:
+            body.append(cleaned)
+    return hero, body
+
+
 def feed_page_url(feed_url, page):
     if page == 1:
         return feed_url
@@ -1922,9 +1959,12 @@ for number, (title, url, published_at) in enumerate(articles, 1):
                     "alt": block["alt"],
                     "caption": block["caption"],
                     "sourceUrl": urllib.parse.urljoin(url, block["source"]),
+                    "isHero": block.get("isHero") is True,
                 }
             )
             image_count += 1
+
+    hero_image, uploaded_blocks = separate_hero_image(uploaded_blocks)
 
     article = {
         "sourceUrl": url,
@@ -1935,6 +1975,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         **editorial_metadata,
         "publish": True,
     }
+    if hero_image:
+        article["heroImageUrl"] = hero_image["url"]
 
     post_request = urllib.request.Request(
         f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts",

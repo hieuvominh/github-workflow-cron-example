@@ -354,6 +354,37 @@ def upload_image_to_media_repo(source_url, image_data, extension, media_repo, me
     return f"https://raw.githubusercontent.com/{media_repo}/{urllib.parse.quote(branch, safe='')}/{encoded_path}"
 
 
+def separate_hero_image(blocks):
+    hero_index = next(
+        (
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "image" and block.get("isHero") is True
+        ),
+        None,
+    )
+    if hero_index is None:
+        hero_index = next(
+            (
+                index
+                for index, block in enumerate(blocks)
+                if block.get("type") == "image"
+            ),
+            None,
+        )
+
+    hero = None
+    body = []
+    for index, block in enumerate(blocks):
+        cleaned = dict(block)
+        cleaned.pop("isHero", None)
+        if index == hero_index:
+            hero = cleaned
+        else:
+            body.append(cleaned)
+    return hero, body
+
+
 def publish_draft(draft, rewritten, image_cache, bytekora_url, ingest_secret, media_repo, media_token, branch):
     title, excerpt, blocks, metadata = rewritten
     uploaded_blocks = []
@@ -381,9 +412,12 @@ def publish_draft(draft, rewritten, image_cache, bytekora_url, ingest_secret, me
                 "alt": block.get("alt", ""),
                 "caption": block.get("caption", ""),
                 "sourceUrl": source,
+                "isHero": block.get("isHero") is True,
             }
         )
         image_count += 1
+
+    hero_image, uploaded_blocks = separate_hero_image(uploaded_blocks)
 
     article = {
         "sourceUrl": draft.source_url,
@@ -394,6 +428,8 @@ def publish_draft(draft, rewritten, image_cache, bytekora_url, ingest_secret, me
         **metadata,
         "publish": True,
     }
+    if hero_image:
+        article["heroImageUrl"] = hero_image["url"]
     url = f"{bytekora_url.rstrip('/')}/api/crawler/posts"
     try:
         with request_url(

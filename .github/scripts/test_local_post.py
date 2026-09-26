@@ -85,5 +85,18 @@ class ParseDraftTests(unittest.TestCase):
             local_post.parse_draft(self.draft_text(wrong_category))
 
 
+class HeroSelectionTests(unittest.TestCase):
+    def test_designated_hero_is_removed_without_dropping_inline_image(self):
+        blocks = [
+            {"type": "image", "url": "https://img.test/inline.jpg", "isHero": False},
+            {"type": "image", "url": "https://img.test/hero.jpg", "isHero": True},
+        ]
+
+        hero, body = local_post.separate_hero_image(blocks)
+
+        self.assertEqual(hero["url"], "https://img.test/hero.jpg")
+        self.assertEqual(body, [{"type": "image", "url": "https://img.test/inline.jpg"}])
+
+
 if __name__ == "__main__":
     unittest.main()
