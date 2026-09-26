@@ -1473,6 +1473,28 @@ def article_exists(source_url):
         raise
 
 
+def existing_article_urls(source_urls):
+    unique_urls = list(dict.fromkeys(source_urls))
+    request = urllib.request.Request(
+        f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts",
+        data=json.dumps({"externalSourceIDs": unique_urls}).encode(),
+        headers={
+            "Authorization": f"Bearer {INGEST_SECRET}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read())
+            return set(result.get("existing") or [])
+    except urllib.error.HTTPError as error:
+        if error.code in (404, 405):
+            print("    Batch duplicate check is unavailable; using individual checks")
+            return {url for url in unique_urls if article_exists(url)}
+        raise
+
+
 def optimize_image(image_data, content_type):
     extension_by_format = {
         "GIF": "gif",
@@ -1792,8 +1814,10 @@ if not articles:
     print(f"No RSS/Atom articles found{scope}")
     raise SystemExit(0)
 
+existing_urls = existing_article_urls([url for _, url, _ in articles])
+
 for number, (title, url, published_at) in enumerate(articles, 1):
-    if article_exists(url):
+    if url in existing_urls:
         print(f"{number:02}. Skipped duplicate: {url}")
         continue
 
