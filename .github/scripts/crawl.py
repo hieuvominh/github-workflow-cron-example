@@ -1875,7 +1875,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     clean_text = "\n\n".join(text_blocks)
 
     if len(clean_text) < 200:
-        fallback_page, fallback_body = prepare_article_html(downloaded, article_url)
+        fallback_page, fallback_body = prepare_article_html(downloaded, url)
         fallback_text = trafilatura.extract(
             fallback_body or fallback_page,
             url=url,
