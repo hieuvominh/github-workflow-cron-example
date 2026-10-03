@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 
 from facebook_publisher import enqueue_published_article, flush_pending_shares
+from responsive_images import make_responsive_variants
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -267,34 +268,20 @@ def validate_and_optimize_images(blocks):
         try:
             image = Image.open(BytesIO(data))
             image.verify()
-            image = Image.open(BytesIO(data))
-            has_alpha = image.mode in ("RGBA", "LA") or (
-                image.mode == "P" and "transparency" in image.info
+            variants = make_responsive_variants(
+                data,
+                quality=84,
+                max_bytes=MAX_IMAGE_UPLOAD_BYTES,
             )
-            image_mode = "RGBA" if has_alpha else "RGB"
-            if image.width > 1600 or image.height > 1600:
-                image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-                output = BytesIO()
-                image.convert(image_mode).save(output, format="WEBP", quality=84, method=6)
-                optimized, extension = output.getvalue(), "webp"
-            elif len(data) > MAX_IMAGE_UPLOAD_BYTES:
-                output = BytesIO()
-                image.convert(image_mode).save(output, format="WEBP", quality=84, method=6)
-                optimized, extension = output.getvalue(), "webp"
-            else:
-                extension = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif"}.get(image.format)
-                if not extension:
-                    output = BytesIO()
-                    image.convert(image_mode).save(output, format="WEBP", quality=84, method=6)
-                    optimized, extension = output.getvalue(), "webp"
-                else:
-                    optimized = data
-            if len(optimized) > MAX_IMAGE_UPLOAD_BYTES:
+            if not variants:
                 raise ValueError(f"Image is too large after optimization: {source}")
         except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as error:
             raise ValueError(f"Image cannot be decoded safely: {source}: {error}") from error
-        image_cache[source] = (optimized, extension)
-        print(f"Image OK: {source} ({image.width}×{image.height}, {len(optimized)} bytes)")
+        image_cache[source] = variants
+        print(
+            f"Image OK: {source} ({image.width}×{image.height}, "
+            f"{len(variants)} responsive file(s))"
+        )
     return image_cache
 
 
@@ -321,39 +308,43 @@ def check_duplicate(bytekora_url, ingest_secret, source_url):
         raise
 
 
-def upload_image_to_media_repo(source_url, image_data, extension, media_repo, media_token, branch):
-    digest = hashlib.sha256(image_data).hexdigest()
-    media_path = f"articles/{digest[:2]}/{digest}.{extension}"
-    encoded_path = urllib.parse.quote(media_path, safe="/")
-    api_url = f"https://api.github.com/repos/{media_repo}/contents/{encoded_path}"
+def upload_image_to_media_repo(source_url, variants, media_repo, media_token, branch):
+    digest = hashlib.sha256(variants[-1][1]).hexdigest()
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {media_token}",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "BYTERMINALBot/0.1",
     }
-    try:
-        with request_url(
-            f"{api_url}?ref={urllib.parse.quote(branch)}", headers=headers
-        ):
-            pass
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        payload = {
-            "message": f"Add manually prepared article image {digest[:12]}",
-            "content": base64.b64encode(image_data).decode("ascii"),
-            "branch": branch,
-        }
-        with request_url(
-            api_url,
-            method="PUT",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={**headers, "Content-Type": "application/json"},
-            timeout=60,
-        ):
-            pass
-    return f"https://raw.githubusercontent.com/{media_repo}/{urllib.parse.quote(branch, safe='')}/{encoded_path}"
+    canonical_path = None
+    for width, image_data, extension in variants:
+        suffix = f"-w{width}" if extension == "webp" else ""
+        media_path = f"articles/{digest[:2]}/{digest}{suffix}.{extension}"
+        encoded_path = urllib.parse.quote(media_path, safe="/")
+        api_url = f"https://api.github.com/repos/{media_repo}/contents/{encoded_path}"
+        try:
+            with request_url(
+                f"{api_url}?ref={urllib.parse.quote(branch)}", headers=headers
+            ):
+                pass
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            payload = {
+                "message": f"Add manually prepared image {digest[:12]} w{width}",
+                "content": base64.b64encode(image_data).decode("ascii"),
+                "branch": branch,
+            }
+            with request_url(
+                api_url,
+                method="PUT",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={**headers, "Content-Type": "application/json"},
+                timeout=60,
+            ):
+                pass
+        canonical_path = encoded_path
+    return f"https://raw.githubusercontent.com/{media_repo}/{urllib.parse.quote(branch, safe='')}/{canonical_path}"
 
 
 def separate_hero_image(blocks):
@@ -400,9 +391,9 @@ def publish_draft(draft, rewritten, image_cache, bytekora_url, ingest_secret, me
             print(f"Image limit reached ({MAX_IMAGES}); remaining images omitted")
             continue
         source = block["source"]
-        optimized, extension = image_cache[source]
+        variants = image_cache[source]
         hosted_url = upload_image_to_media_repo(
-            source, optimized, extension, media_repo, media_token, branch
+            source, variants, media_repo, media_token, branch
         )
         if hosted_url in seen_images:
             continue

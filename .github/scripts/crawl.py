@@ -13,16 +13,16 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from io import BytesIO
 
 import trafilatura
 import trafilatura.settings
 from lxml import etree as lxml_etree
 from lxml import html as lxml_html
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image
 
 from gemini_rewriter import rewrite_article
 from facebook_publisher import enqueue_published_article, flush_pending_shares
+from responsive_images import make_responsive_variants
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
@@ -1534,56 +1534,16 @@ def existing_article_urls(source_urls):
 
 
 def optimize_image(image_data, content_type):
-    extension_by_format = {
-        "GIF": "gif",
-        "JPEG": "jpg",
-        "PNG": "png",
-        "WEBP": "webp",
-    }
-
-    try:
-        with Image.open(BytesIO(image_data)) as source:
-            source_format = (source.format or "").upper()
-            original_extension = extension_by_format.get(source_format)
-            if not original_extension:
-                return None
-
-            if getattr(source, "is_animated", False):
-                if len(image_data) > IMAGE_UPLOAD_MAX_BYTES:
-                    return None
-                return image_data, original_extension
-
-            image = ImageOps.exif_transpose(source)
-            original_dimensions = image.size
-            image.thumbnail(
-                (IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT),
-                Image.Resampling.LANCZOS,
-            )
-            was_resized = image.size != original_dimensions
-
-            has_alpha = image.mode in ("RGBA", "LA") or (
-                image.mode == "P" and "transparency" in image.info
-            )
-            image = image.convert("RGBA" if has_alpha else "RGB")
-            output = BytesIO()
-            image.save(
-                output,
-                format="WEBP",
-                quality=IMAGE_WEBP_QUALITY,
-                method=6,
-            )
-            optimized_data = output.getvalue()
-
-            if len(optimized_data) > IMAGE_UPLOAD_MAX_BYTES:
-                return None
-            if was_resized or len(optimized_data) < len(image_data):
-                return optimized_data, "webp"
-            if len(image_data) <= IMAGE_UPLOAD_MAX_BYTES:
-                return image_data, original_extension
-            return None
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
+    variants = make_responsive_variants(
+        image_data,
+        quality=IMAGE_WEBP_QUALITY,
+        max_bytes=IMAGE_UPLOAD_MAX_BYTES,
+        max_width=IMAGE_MAX_WIDTH,
+        max_height=IMAGE_MAX_HEIGHT,
+    )
+    if not variants:
         print(f"    Unsupported or unsafe image skipped ({content_type})")
-        return None
+    return variants
 
 
 def encoded_url(value):
@@ -1627,12 +1587,7 @@ def upload_image(source_url, article_url):
     optimized = optimize_image(image_data, content_type)
     if not optimized:
         return None
-    image_data, extension = optimized
-
-    digest = hashlib.sha256(image_data).hexdigest()
-    media_path = f"articles/{digest[:2]}/{digest}.{extension}"
-    encoded_path = urllib.parse.quote(media_path, safe="/")
-    api_url = f"https://api.github.com/repos/{MEDIA_REPO}/contents/{encoded_path}"
+    digest = hashlib.sha256(optimized[-1][1]).hexdigest()
     api_headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {MEDIA_TOKEN}",
@@ -1640,35 +1595,42 @@ def upload_image(source_url, article_url):
         "User-Agent": "BYTERMINALBot/0.1",
     }
 
-    exists_request = urllib.request.Request(
-        f"{api_url}?ref={urllib.parse.quote(MEDIA_BRANCH)}",
-        headers=api_headers,
-    )
-    try:
-        with urllib.request.urlopen(exists_request, timeout=30):
-            pass
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        upload_request = urllib.request.Request(
-            api_url,
-            data=json.dumps(
-                {
-                    "message": f"Add crawled image {digest[:12]}",
-                    "content": base64.b64encode(image_data).decode(),
-                    "branch": MEDIA_BRANCH,
-                }
-            ).encode(),
-            headers={**api_headers, "Content-Type": "application/json"},
-            method="PUT",
+    uploaded_paths = []
+    for width, variant_data, extension in optimized:
+        suffix = f"-w{width}" if extension == "webp" else ""
+        media_path = f"articles/{digest[:2]}/{digest}{suffix}.{extension}"
+        encoded_path = urllib.parse.quote(media_path, safe="/")
+        api_url = f"https://api.github.com/repos/{MEDIA_REPO}/contents/{encoded_path}"
+        exists_request = urllib.request.Request(
+            f"{api_url}?ref={urllib.parse.quote(MEDIA_BRANCH)}",
+            headers=api_headers,
         )
-        with urllib.request.urlopen(upload_request, timeout=60):
-            pass
+        try:
+            with urllib.request.urlopen(exists_request, timeout=30):
+                pass
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            upload_request = urllib.request.Request(
+                api_url,
+                data=json.dumps(
+                    {
+                        "message": f"Add crawled image {digest[:12]} w{width}",
+                        "content": base64.b64encode(variant_data).decode(),
+                        "branch": MEDIA_BRANCH,
+                    }
+                ).encode(),
+                headers={**api_headers, "Content-Type": "application/json"},
+                method="PUT",
+            )
+            with urllib.request.urlopen(upload_request, timeout=60):
+                pass
+        uploaded_paths.append(encoded_path)
 
     branch = urllib.parse.quote(MEDIA_BRANCH, safe="")
     return (
         f"https://raw.githubusercontent.com/{MEDIA_REPO}/"
-        f"{branch}/{encoded_path}"
+        f"{branch}/{uploaded_paths[-1]}"
     )
 
 
