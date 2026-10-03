@@ -16,7 +16,7 @@ class FacebookPublisherTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.state_file = Path(self.temp.name) / "facebook-state.json"
         self.environment = patch.dict(os.environ, {
-            "FACEBOOK_PAGE_ID": "1992170297687244",
+            "FACEBOOK_PAGE_ID": "100037609826117",
             "FACEBOOK_PAGE_ACCESS_TOKEN": "test-token-not-real",
             "FACEBOOK_SHARE_STATE_FILE": str(self.state_file),
             "SITE_PUBLIC_URL": "https://www.byterminal.com",

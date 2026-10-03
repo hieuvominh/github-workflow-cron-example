@@ -57,7 +57,7 @@ jobs:
           MEDIA_REPO: ${{ vars.MEDIA_REPO }}
           MEDIA_BRANCH: ${{ vars.MEDIA_BRANCH || 'main' }}
           MEDIA_TOKEN: ${{ secrets.MEDIA_TOKEN }}
-          FACEBOOK_PAGE_ID: ${{ vars.FACEBOOK_PAGE_ID || '1992170297687244' }}
+          FACEBOOK_PAGE_ID: ${{ vars.FACEBOOK_PAGE_ID || '100037609826117' }}
           FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
           SITE_PUBLIC_URL: ${{ vars.SITE_PUBLIC_URL || 'https://www.byterminal.com' }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
