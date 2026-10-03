@@ -72,6 +72,34 @@ def _save_state(state):
     os.replace(temporary, path)
 
 
+def _facebook_error_detail(error, token):
+    """Show useful Graph error fields without dumping its raw response or token."""
+    try:
+        payload = json.loads(error.read(16_384).decode("utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return f"Facebook API HTTP {error.code}"
+    details = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(details, dict):
+        return f"Facebook API HTTP {error.code}"
+
+    parts = [f"Facebook API HTTP {error.code}"]
+    for field in ("type", "code", "error_subcode", "message", "error_user_msg", "fbtrace_id"):
+        value = details.get(field)
+        if not isinstance(value, (str, int)) or isinstance(value, bool):
+            continue
+        value = str(value)
+        if token:
+            value = value.replace(token, "[REDACTED]")
+            value = value.replace(urllib.parse.quote(token, safe=""), "[REDACTED]")
+        value = re.sub(r"(?i)(access[_-]?token\s*[=:]\s*)\S+", r"\1[REDACTED]", value)
+        value = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", value)
+        value = re.sub(r"\bEAA[A-Za-z0-9_-]{12,}\b", "[REDACTED]", value)
+        value = " ".join(value.split())[:500]
+        if value:
+            parts.append(f"{field}={value}")
+    return "; ".join(parts)
+
+
 def _post_link(url, message):
     page_id = os.environ["FACEBOOK_PAGE_ID"].strip()
     token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
@@ -92,8 +120,7 @@ def _post_link(url, message):
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        # Do not print response bodies or credentials into public Actions logs.
-        raise RuntimeError(f"Facebook API HTTP {error.code}") from error
+        raise RuntimeError(_facebook_error_detail(error, token)) from error
     post_id = str(result.get("id") or "").strip()
     if not post_id:
         raise RuntimeError("Facebook API response has no post ID")

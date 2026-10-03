@@ -1,11 +1,13 @@
 """Offline checks for the optional Facebook Page sharing step."""
 
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import urllib.error
 
 import facebook_publisher as publisher
 
@@ -76,6 +78,30 @@ class FacebookPublisherTests(unittest.TestCase):
             publisher.enqueue_published_article({**self.result, "status": "draft"}, self.article)
         post.assert_not_called()
         self.assertFalse(self.state_file.exists())
+
+    def test_http_error_logs_graph_reason_but_never_token(self):
+        token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"]
+        body = json.dumps({"error": {
+            "type": "OAuthException",
+            "code": 200,
+            "error_subcode": 123,
+            "message": f"Missing pages_manage_posts for access_token={token}",
+            "fbtrace_id": "ABC123",
+        }}).encode("utf-8")
+        response = urllib.error.HTTPError("https://graph.facebook.com", 400, "Bad Request", {}, BytesIO(body))
+        with patch.object(publisher.urllib.request, "urlopen", side_effect=response):
+            with self.assertRaises(RuntimeError) as raised:
+                publisher._post_link("https://www.byterminal.com/ai/example-123", "Example")
+        detail = str(raised.exception)
+        self.assertIn("HTTP 400", detail)
+        self.assertIn("code=200", detail)
+        self.assertIn("error_subcode=123", detail)
+        self.assertIn("pages_manage_posts", detail)
+        self.assertNotIn(token, detail)
+
+    def test_non_json_http_error_stays_generic(self):
+        response = urllib.error.HTTPError("https://graph.facebook.com", 400, "Bad Request", {}, BytesIO(b"not json"))
+        self.assertEqual(publisher._facebook_error_detail(response, "test-token-not-real"), "Facebook API HTTP 400")
 
 
 if __name__ == "__main__":
