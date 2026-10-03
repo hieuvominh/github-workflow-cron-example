@@ -22,6 +22,7 @@ from lxml import html as lxml_html
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from gemini_rewriter import rewrite_article
+from facebook_publisher import enqueue_published_article, flush_pending_shares
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
@@ -1841,6 +1842,7 @@ def extract_blocks(downloaded, article_url):
     return add_page_media(blocks, hero, videos, recovered)
 
 
+flush_pending_shares()
 articles = collect_articles()
 if not articles:
     scope = (
@@ -2005,4 +2007,5 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         f"    Extracted: {len(clean_text)} characters, {image_count} images\n"
         f"    CMS: {result}"
     )
+    enqueue_published_article(result, article)
     time.sleep(1)

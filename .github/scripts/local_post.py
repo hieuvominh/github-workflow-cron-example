@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from facebook_publisher import enqueue_published_article, flush_pending_shares
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAX_IMAGE_BYTES = 30_000_000
@@ -537,6 +539,8 @@ def main(argv=None):
         )
         print(f"Published: {article['title']}")
         print(f"CMS response: {json.dumps(result, ensure_ascii=False)}")
+        flush_pending_shares()
+        enqueue_published_article(result, article)
         return 0
     except Exception as error:
         print(f"ERROR: {error}", file=sys.stderr)

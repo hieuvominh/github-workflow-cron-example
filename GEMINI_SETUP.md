@@ -22,6 +22,23 @@ Example secret value:
 YOUR_GEMINI_KEY_1,YOUR_GEMINI_KEY_2,YOUR_GEMINI_KEY_3
 ```
 
+## Optional Facebook Page sharing
+
+To automatically share an article after the CMS confirms `status: published`, add
+`FACEBOOK_PAGE_ACCESS_TOKEN` as a GitHub Actions **secret**. Use a Page access token
+with permission to publish Page posts; never put it in a workflow file or commit it.
+The configured Page ID defaults to `1992170297687244`. You can override it with the
+Actions variable `FACEBOOK_PAGE_ID`. The public site defaults to
+`https://www.byterminal.com` and can be changed with the `SITE_PUBLIC_URL` variable.
+
+The share uses the CMS public URL and a message made from the article title and short
+excerpt. If the CMS responds with only a slug, the URL is built from the article
+category and saved slug. A Facebook error does not undo or fail CMS publishing: the
+link remains in a category-specific, cached outbox and is retried on the next run.
+Already shared links are recorded to avoid posting them again. Without the secret,
+the Facebook step is skipped. Local publishing supports the same environment
+variables in `.secrets/local-post.env`.
+
 ## Local API key file
 
 Copy `api_keys.example.txt` to `api_keys.txt`, then put one key on each line or

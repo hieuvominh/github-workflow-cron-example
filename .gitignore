@@ -1,6 +1,8 @@
 api_keys.txt
 .gemini-key-index
 .gemini-model-preferences.json
+.facebook-share-state.json
+.facebook-share-state.json.tmp
 .secrets/
 __pycache__/
 *.pyc
