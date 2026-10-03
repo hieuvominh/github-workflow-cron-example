@@ -6,6 +6,7 @@ again. GitHub Actions restores and saves that outbox between runs.
 """
 
 import json
+from functools import lru_cache
 import os
 from pathlib import Path
 import re
@@ -100,12 +101,64 @@ def _facebook_error_detail(error, token):
     return "; ".join(parts)
 
 
-def _post_link(url, message):
+def _graph_settings():
     page_id = os.environ["FACEBOOK_PAGE_ID"].strip()
-    token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
     version = os.environ.get("FACEBOOK_GRAPH_VERSION", DEFAULT_GRAPH_VERSION).strip()
     if not re.fullmatch(r"\d+", page_id) or not re.fullmatch(r"v\d+\.\d+", version):
         raise ValueError("Invalid Facebook Page ID or Graph API version")
+    return page_id, version
+
+
+def _graph_get(version, path, token):
+    request = urllib.request.Request(
+        f"https://graph.facebook.com/{version}/{path}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(_facebook_error_detail(error, token)) from error
+    if not isinstance(result, dict):
+        raise RuntimeError("Facebook API returned an invalid token lookup response")
+    return result
+
+
+@lru_cache(maxsize=4)
+def _resolve_page_token(page_id, version, configured_token):
+    """Use a Page token, or exchange an assigned User/System User token for one."""
+    try:
+        identity = _graph_get(version, "me?fields=id,name", configured_token)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(f"Could not identify Facebook token: {error}") from error
+    if str(identity.get("id") or "") == page_id:
+        return configured_token
+
+    try:
+        page = _graph_get(version, f"{page_id}?fields=id,name,access_token", configured_token)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(
+            f"Secret is not a token for Page {page_id}, and Meta could not provide its Page token: {error}"
+        ) from error
+    candidate = page.get("access_token")
+    if str(page.get("id") or "") != page_id or not isinstance(candidate, str) or not candidate:
+        raise RuntimeError(
+            f"Secret is not a token for Page {page_id}, and Meta did not return its Page token"
+        )
+    try:
+        page_identity = _graph_get(version, "me?fields=id,name", candidate)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(f"Meta returned a Page token that could not be verified: {error}") from error
+    if str(page_identity.get("id") or "") != page_id:
+        raise RuntimeError("Meta returned a token for a different Page; share remains pending")
+    print(f"    Facebook resolved Page token for Page {page_id}")
+    return candidate
+
+
+def _post_link(url, message):
+    page_id, version = _graph_settings()
+    configured_token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
+    token = _resolve_page_token(page_id, version, configured_token)
     data = urllib.parse.urlencode({"message": message, "link": url}).encode("utf-8")
     request = urllib.request.Request(
         f"https://graph.facebook.com/{version}/{page_id}/feed",

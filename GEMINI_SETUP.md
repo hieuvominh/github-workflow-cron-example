@@ -25,8 +25,10 @@ YOUR_GEMINI_KEY_1,YOUR_GEMINI_KEY_2,YOUR_GEMINI_KEY_3
 ## Optional Facebook Page sharing
 
 To automatically share an article after the CMS confirms `status: published`, add
-`FACEBOOK_PAGE_ACCESS_TOKEN` as a GitHub Actions **secret**. Use a Page access token
-with permission to publish Page posts; never put it in a workflow file or commit it.
+`FACEBOOK_PAGE_ACCESS_TOKEN` as a GitHub Actions **secret**. A Page access token is
+preferred. A User or System User token may also work if Meta allows the workflow to
+retrieve a token for the configured Page; otherwise the share stays pending with a
+clear error. Never put any access token in a workflow file or commit it.
 The configured Page ID defaults to `1992170297687244`. You can override it with the
 Actions variable `FACEBOOK_PAGE_ID`. The public site defaults to
 `https://www.byterminal.com` and can be changed with the `SITE_PUBLIC_URL` variable.

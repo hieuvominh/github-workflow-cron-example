@@ -25,6 +25,8 @@ class FacebookPublisherTests(unittest.TestCase):
         })
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        publisher._resolve_page_token.cache_clear()
+        self.addCleanup(publisher._resolve_page_token.cache_clear)
         self.article = {
             "title": "Example title",
             "excerpt": "Short description.",
@@ -102,6 +104,53 @@ class FacebookPublisherTests(unittest.TestCase):
     def test_non_json_http_error_stays_generic(self):
         response = urllib.error.HTTPError("https://graph.facebook.com", 400, "Bad Request", {}, BytesIO(b"not json"))
         self.assertEqual(publisher._facebook_error_detail(response, "test-token-not-real"), "Facebook API HTTP 400")
+
+    def test_posts_with_configured_page_token(self):
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            if request.get_method() == "GET":
+                return BytesIO(b'{"id":"1992170297687244","name":"Byterminal"}')
+            return BytesIO(b'{"id":"1992170297687244_42"}')
+
+        with patch.object(publisher.urllib.request, "urlopen", side_effect=fake_urlopen):
+            self.assertEqual(publisher._post_link("https://www.byterminal.com/ai/example", "Example"), "1992170297687244_42")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[-1].get_header("Authorization"), "Bearer test-token-not-real")
+
+    def test_exchanges_system_user_token_and_posts_with_page_token(self):
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            if request.get_method() == "POST":
+                return BytesIO(b'{"id":"1992170297687244_43"}')
+            if "1992170297687244?" in request.full_url:
+                return BytesIO(b'{"id":"1992170297687244","name":"Byterminal","access_token":"page-token-test"}')
+            if request.get_header("Authorization") == "Bearer page-token-test":
+                return BytesIO(b'{"id":"1992170297687244","name":"Byterminal"}')
+            return BytesIO(b'{"id":"system-user-id","name":"System User"}')
+
+        with patch.object(publisher.urllib.request, "urlopen", side_effect=fake_urlopen):
+            self.assertEqual(publisher._post_link("https://www.byterminal.com/ai/example", "Example"), "1992170297687244_43")
+            self.assertEqual(publisher._post_link("https://www.byterminal.com/ai/example-2", "Example"), "1992170297687244_43")
+        self.assertEqual(len([request for request in requests if request.get_method() == "GET"]), 3)
+        self.assertEqual(requests[-1].get_header("Authorization"), "Bearer page-token-test")
+
+    def test_does_not_post_if_meta_does_not_return_page_token(self):
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            if "1992170297687244?" in request.full_url:
+                return BytesIO(b'{"id":"1992170297687244","name":"Byterminal"}')
+            return BytesIO(b'{"id":"system-user-id"}')
+
+        with patch.object(publisher.urllib.request, "urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, "Meta did not return its Page token"):
+                publisher._post_link("https://www.byterminal.com/ai/example", "Example")
+        self.assertTrue(all(request.get_method() == "GET" for request in requests))
 
 
 if __name__ == "__main__":
