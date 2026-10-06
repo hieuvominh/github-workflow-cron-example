@@ -1,6 +1,10 @@
 import unittest
 
-from review_affiliates import amazon_affiliate_url, extract_techradar_amazon_candidates
+from review_affiliates import (
+    affiliate_product_payload,
+    amazon_affiliate_url,
+    extract_techradar_amazon_candidates,
+)
 
 
 class ReviewAffiliatesTests(unittest.TestCase):
@@ -54,6 +58,20 @@ class ReviewAffiliatesTests(unittest.TestCase):
         self.assertEqual(candidate["sourceObservedPrice"], {
             "amount": "1799.99", "currency": "USD", "source": "techradar_widget"
         })
+
+    def test_payload_contains_only_gemini_approved_products(self):
+        decisions = [
+            {"name": "EarFun Wave Pro X", "asin": "B0H8N49DSC", "related": True},
+            {"name": "Other headphones", "asin": "B000000000", "related": False},
+        ]
+        self.assertEqual(affiliate_product_payload(decisions), [{
+            "name": "EarFun Wave Pro X",
+            "merchant": "amazon.com",
+            "asin": "B0H8N49DSC",
+            "affiliateUrl": "https://www.amazon.com/dp/B0H8N49DSC?tag=byterminal-20",
+            "price": None,
+            "currency": None,
+        }])
 
 
 if __name__ == "__main__":

@@ -21,6 +21,22 @@ def amazon_affiliate_url(asin):
     return f"https://www.amazon.com/dp/{asin}?tag={ASSOCIATE_TAG}"
 
 
+def affiliate_product_payload(decisions):
+    """Build the proposed CMS field from Gemini-approved matches only."""
+    return [
+        {
+            "name": item["name"],
+            "merchant": "amazon.com",
+            "asin": item["asin"],
+            "affiliateUrl": amazon_affiliate_url(item["asin"]),
+            "price": None,
+            "currency": None,
+        }
+        for item in decisions
+        if item.get("related") is True
+    ]
+
+
 def _amazon_product_url(link):
     parsed = urllib.parse.urlsplit(link)
     host = (parsed.hostname or "").lower()

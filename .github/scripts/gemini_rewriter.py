@@ -1029,6 +1029,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
     if affiliate_candidates:
         validation_source["affiliateCandidates"] = affiliate_candidates
     contract_issues = _writer_contract_issues(result)
+    if affiliate_candidates and _matched_affiliate_decisions(affiliate_candidates, result) is None:
+        contract_issues.append("affiliateProducts must decide every supplied candidate id")
     if contract_issues:
         validation = {
             "readyToPublish": False,
@@ -1055,6 +1057,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
             api_keys,
         )
         repaired_contract_issues = _writer_contract_issues(result)
+        if affiliate_candidates and _matched_affiliate_decisions(affiliate_candidates, result) is None:
+            repaired_contract_issues.append("affiliateProducts must decide every supplied candidate id")
         if repaired_contract_issues:
             raise RuntimeError(
                 "Gemini still omitted a required field after repair: "

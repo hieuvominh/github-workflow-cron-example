@@ -97,6 +97,18 @@ calling Gemini; duplicate drafts stop without using a Gemini key.
 
 ## Editorial prompts and validation
 
+The GitHub Actions job **Manual Review Preview** accepts one HTTPS TechRadar URL.
+It runs extraction and Gemini review/product matching, then prints a proposed
+`affiliateProducts` payload. It does not query or post to the CMS, upload images,
+or publish to Facebook. The former manual draft flow is disabled because the
+CMS returned `status: published` even when sent `publish: false`. Do not restore
+CMS writes until a draft-capable API is confirmed and tested.
+
+An `affiliateProducts` proposal contains only Gemini-matched Amazon products,
+with `name`, `merchant`, `asin`, a direct link tagged `byterminal-20`, and null
+`price`/`currency` for later Amazon-authorized enrichment. This field is not yet
+supported or sent to the CMS.
+
 The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It applies two layers:
 deterministic source cleanup, followed by a Gemini writer and an independent Gemini validator. A
 failed draft receives one repair attempt and is never published if it fails validation again.
