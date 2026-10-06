@@ -300,7 +300,7 @@ def parse_source_vertical_rules(raw_rules):
 
 SOURCE_VERTICAL_RULES = parse_source_vertical_rules(RAW_SOURCE_VERTICAL_RULES)
 
-if not SOURCE_FEED_URLS:
+if not SOURCE_FEED_URLS and not MANUAL_ARTICLE_URL:
     print(
         f"Skipped {CATEGORY_SLUG}: configure "
         "FEED_URLS in the workflow"
@@ -1960,6 +1960,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         **editorial_metadata,
         "publish": not bool(MANUAL_ARTICLE_URL),
     }
+    if MANUAL_ARTICLE_URL:
+        article["categorySlug"] = "reviews"
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
 
