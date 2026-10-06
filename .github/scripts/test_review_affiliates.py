@@ -61,7 +61,10 @@ class ReviewAffiliatesTests(unittest.TestCase):
 
     def test_payload_contains_only_gemini_approved_products(self):
         decisions = [
-            {"name": "EarFun Wave Pro X", "asin": "B0H8N49DSC", "related": True},
+            {
+                "name": "EarFun Wave Pro X", "asin": "B0H8N49DSC", "related": True,
+                "sourceObservedPrice": {"amount": "103.99", "currency": "USD", "source": "techradar_widget"},
+            },
             {"name": "Other headphones", "asin": "B000000000", "related": False},
         ]
         self.assertEqual(affiliate_product_payload(decisions), [{
@@ -69,9 +72,14 @@ class ReviewAffiliatesTests(unittest.TestCase):
             "merchant": "amazon.com",
             "asin": "B0H8N49DSC",
             "affiliateUrl": "https://www.amazon.com/dp/B0H8N49DSC?tag=byterminal-20",
-            "price": None,
-            "currency": None,
+            "price": 103.99,
+            "currency": "USD",
         }])
+
+    def test_payload_keeps_missing_price_null(self):
+        self.assertEqual(affiliate_product_payload([
+            {"name": "EarFun Wave Pro X", "asin": "B0H8N49DSC", "related": True},
+        ])[0]["price"], None)
 
 
 if __name__ == "__main__":

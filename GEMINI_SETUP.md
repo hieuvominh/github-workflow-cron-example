@@ -101,13 +101,12 @@ The GitHub Actions job **Manual Review Draft** accepts one HTTPS TechRadar URL.
 It checks the CMS for a duplicate source URL before Gemini, then extracts and
 rewrites the review, uploads its images, and sends it to the CMS with
 `publish: false`. The job succeeds only if the CMS confirms `status: draft`.
-It does not publish to Facebook. It also prints a proposed `affiliateProducts`
-payload for diagnostics, but does not send that field to the CMS.
+It does not publish to Facebook. For TechRadar reviews, it sends only Gemini-matched
+Amazon products in `affiliateProducts` with the draft payload.
 
-An `affiliateProducts` proposal contains only Gemini-matched Amazon products,
-with `name`, `merchant`, `asin`, a direct link tagged `byterminal-20`, and null
-`price`/`currency` for later Amazon-authorized enrichment. This field is not yet
-supported or sent to the CMS.
+Each `affiliateProducts` entry has `name`, `merchant`, `asin`, a direct link tagged
+`byterminal-20`, and a price/currency snapshot from the matching TechRadar card
+when present. Missing prices remain null; a source-card price is not a live Amazon quote.
 
 The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It applies two layers:
 deterministic source cleanup, followed by a Gemini writer and an independent Gemini validator. A

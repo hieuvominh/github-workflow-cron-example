@@ -1,4 +1,4 @@
-"""Experimental TechRadar review-product discovery; never publish source tracking links."""
+"""TechRadar review-product discovery; never publish source tracking links."""
 
 import re
 import urllib.parse
@@ -22,15 +22,21 @@ def amazon_affiliate_url(asin):
 
 
 def affiliate_product_payload(decisions):
-    """Build the proposed CMS field from Gemini-approved matches only."""
+    """Build the CMS field from Gemini-approved matches only."""
     return [
         {
             "name": item["name"],
             "merchant": "amazon.com",
             "asin": item["asin"],
             "affiliateUrl": amazon_affiliate_url(item["asin"]),
-            "price": None,
-            "currency": None,
+            "price": (
+                float(item["sourceObservedPrice"]["amount"])
+                if item.get("sourceObservedPrice") else None
+            ),
+            "currency": (
+                item["sourceObservedPrice"]["currency"]
+                if item.get("sourceObservedPrice") else None
+            ),
         }
         for item in decisions
         if item.get("related") is True
@@ -63,7 +69,7 @@ def _product_name(anchor):
 
 
 def _observed_price(anchor, asin):
-    """Diagnostic-only price from TechRadar's card, not Amazon-authorized display data."""
+    """Price snapshot from TechRadar's card, not a live Amazon quote."""
     cards = anchor.xpath(
         "ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' hawk-grid-item-container ') "
         "or contains(concat(' ', normalize-space(@class), ' '), ' hawk-multimodel-review-items-grid-item ')][1]"

@@ -1917,26 +1917,15 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         print(f"{number:02}. Skipped: Gemini rewrite failed for {url}: {error}")
         continue
 
+    affiliate_products = []
     if MANUAL_ARTICLE_URL:
         related_products = [item for item in affiliate_decisions if item["related"]]
-        affiliate_proposal = {
-            "sourceUrl": url,
-            "title": title,
-            "categorySlug": editorial_metadata.get("categorySlug", CATEGORY_SLUG),
-            "contentType": editorial_metadata["contentType"],
-            "affiliateProducts": affiliate_product_payload(affiliate_decisions),
-        }
+        affiliate_products = affiliate_product_payload(affiliate_decisions)
         print(
             "    Experimental TechRadar Amazon matches: "
             f"{len(related_products)}/{len(affiliate_candidates)}"
         )
-        print("    Experimental affiliate proposal (not sent to CMS): " + json.dumps(affiliate_proposal))
-        for item in related_products:
-            if item.get("sourceObservedPrice"):
-                print(
-                    "    Source-widget price for diagnostic use only "
-                    f"({item['asin']}): " + json.dumps(item["sourceObservedPrice"])
-                )
+        print("    Affiliate products for CMS: " + json.dumps(affiliate_products))
 
     uploaded_blocks = []
     image_count = 0
@@ -1994,10 +1983,12 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
     if MANUAL_ARTICLE_URL:
+        article["affiliateProducts"] = affiliate_products
         print(
             "    Manual draft payload: "
             f"categorySlug={article['categorySlug']}, "
-            f"contentType={article['contentType']}, publish={article['publish']}"
+            f"contentType={article['contentType']}, publish={article['publish']}, "
+            f"affiliateProducts={len(article['affiliateProducts'])}"
         )
 
     post_request = urllib.request.Request(
