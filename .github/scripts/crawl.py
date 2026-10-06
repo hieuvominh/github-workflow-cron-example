@@ -1844,7 +1844,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         continue
     affiliate_candidates = (
         extract_techradar_amazon_candidates(downloaded, url)
-        if CATEGORY_SLUG == "reviews"
+        if MANUAL_ARTICLE_URL and CATEGORY_SLUG == "reviews"
         else []
     )
     downloaded = remove_source_blocked_content(downloaded, url)
