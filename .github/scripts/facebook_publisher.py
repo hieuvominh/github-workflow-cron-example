@@ -1,4 +1,4 @@
-"""Share newly published BYTERMINAL articles to a Facebook Page.
+"""Publish article hero photos to a Facebook Page, then comment with the link.
 
 The Page token is read only from the environment. A small local outbox records
 unsent links so a later crawler run can retry without publishing the CMS article
@@ -18,6 +18,8 @@ import urllib.request
 DEFAULT_SITE_URL = "https://www.byterminal.com"
 DEFAULT_GRAPH_VERSION = "v26.0"
 DEFAULT_STATE_FILE = ".facebook-share-state.json"
+_attempted_photos = set()
+_attempted_comments = set()
 
 
 def configured():
@@ -155,14 +157,10 @@ def _resolve_page_token(page_id, version, configured_token):
     return candidate
 
 
-def _post_link(url, message):
-    page_id, version = _graph_settings()
-    configured_token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
-    token = _resolve_page_token(page_id, version, configured_token)
-    data = urllib.parse.urlencode({"message": message, "link": url}).encode("utf-8")
+def _graph_post(path, fields, token, version):
     request = urllib.request.Request(
-        f"https://graph.facebook.com/{version}/{page_id}/feed",
-        data=data,
+        f"https://graph.facebook.com/{version}/{path}",
+        data=urllib.parse.urlencode(fields).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
@@ -174,14 +172,59 @@ def _post_link(url, message):
             result = json.loads(response.read())
     except urllib.error.HTTPError as error:
         raise RuntimeError(_facebook_error_detail(error, token)) from error
-    post_id = str(result.get("id") or "").strip()
-    if not post_id:
-        raise RuntimeError("Facebook API response has no post ID")
+    if not isinstance(result, dict):
+        raise RuntimeError("Facebook API returned an invalid publish response")
+    return result
+
+
+def _post_photo(image_url, caption):
+    page_id, version = _graph_settings()
+    configured_token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
+    token = _resolve_page_token(page_id, version, configured_token)
+    result = _graph_post(
+        f"{page_id}/photos",
+        {"url": image_url, "caption": caption, "published": "true"},
+        token,
+        version,
+    )
+    photo_id = str(result.get("id") or "").strip()
+    if not re.fullmatch(r"\d+", photo_id):
+        raise RuntimeError("Facebook photo response has no valid photo ID")
+    post_id = str(result.get("post_id") or "").strip()
+    if post_id and not re.fullmatch(r"\d+_\d+", post_id):
+        post_id = ""  # The photo was posted; look up its feed post before commenting.
+    return {"photo_id": photo_id, "post_id": post_id, "comment_id": ""}
+
+
+def _post_comment(post_id, article_url):
+    page_id, version = _graph_settings()
+    configured_token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
+    token = _resolve_page_token(page_id, version, configured_token)
+    result = _graph_post(
+        f"{post_id}/comments",
+        {"message": f"Read the full article: {article_url}"},
+        token,
+        version,
+    )
+    comment_id = str(result.get("id") or "").strip()
+    if not comment_id:
+        raise RuntimeError("Facebook comment response has no comment ID")
+    return comment_id
+
+
+def _photo_post_id(photo_id):
+    page_id, version = _graph_settings()
+    configured_token = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"].strip()
+    token = _resolve_page_token(page_id, version, configured_token)
+    result = _graph_get(version, f"{photo_id}?fields=post_id", token)
+    post_id = str(result.get("post_id") or "").strip()
+    if not re.fullmatch(r"\d+_\d+", post_id):
+        raise RuntimeError("Facebook photo is published but its post ID is not available yet")
     return post_id
 
 
 def flush_pending_shares():
-    """Retry saved links; a Facebook failure never invalidates a CMS publish."""
+    """Publish each photo once, then independently retry its first comment."""
     if not configured():
         return
     try:
@@ -190,18 +233,46 @@ def flush_pending_shares():
         print(f"    Facebook outbox unavailable: {error}")
         return
     for url, item in list(state["pending"].items()):
-        try:
-            post_id = _post_link(url, item["message"])
-        except Exception as error:
-            print(f"    Facebook share pending for {url}: {error}")
+        if url in _attempted_photos:
             continue
-        state["posted"][url] = post_id
+        if not isinstance(item, dict) or not item.get("image_url"):
+            print(f"    Facebook share pending for {url}: older queue entry has no hero image; not posting a link-only story")
+            continue
+        _attempted_photos.add(url)
+        try:
+            photo = _post_photo(item["image_url"], item["caption"])
+        except Exception as error:
+            print(f"    Facebook photo pending for {url}: {error}")
+            continue
+        state["posted"][url] = photo
         del state["pending"][url]
         try:
             _save_state(state)
         except OSError as error:
-            print(f"    Facebook share state could not be saved: {error}")
-        print(f"    Facebook shared: {url} (post {post_id})")
+            print(f"    Facebook photo posted but state could not be saved: {error}; check Page before retrying")
+            return
+        print(f"    Facebook photo shared: {url} (photo {photo['photo_id']})")
+
+    for url, photo in list(state["posted"].items()):
+        if not isinstance(photo, dict) or photo.get("comment_id") or url in _attempted_comments:
+            continue  # Legacy link posts are already complete; never re-publish them.
+        _attempted_comments.add(url)
+        try:
+            post_id = photo.get("post_id") or _photo_post_id(photo["photo_id"])
+            if not photo.get("post_id"):
+                photo["post_id"] = post_id
+                _save_state(state)
+            comment_id = _post_comment(post_id, url)
+        except Exception as error:
+            print(f"    Facebook comment pending for {url}: {error}")
+            continue
+        photo["comment_id"] = comment_id
+        try:
+            _save_state(state)
+        except OSError as error:
+            print(f"    Facebook comment posted but state could not be saved: {error}; check Page before retrying")
+            return
+        print(f"    Facebook shared with article link in comment: {url} (post {post_id})")
 
 
 def enqueue_published_article(cms_result, article):
@@ -210,11 +281,19 @@ def enqueue_published_article(cms_result, article):
         return
     try:
         url = public_article_url(cms_result, article)
+        image_url = str(article.get("heroImageUrl") or "").strip()
+        parsed_image = urllib.parse.urlsplit(image_url)
+        if parsed_image.scheme != "https" or parsed_image.hostname != "raw.githubusercontent.com":
+            print(f"    Facebook skipped for {url}: no public GitHub hero image")
+            return
         state = _load_state()
         if url not in state["posted"] and url not in state["pending"]:
             title = str(article.get("title") or "").strip()
-            excerpt = str(article.get("excerpt") or "").strip()
-            state["pending"][url] = {"message": "\n\n".join(part for part in (title, excerpt) if part)}
+            description = str(article.get("seoDescription") or article.get("excerpt") or "").strip()
+            state["pending"][url] = {
+                "image_url": image_url,
+                "caption": "\n\n".join(part for part in (title, description) if part),
+            }
             _save_state(state)
         flush_pending_shares()
     except (OSError, ValueError) as error:

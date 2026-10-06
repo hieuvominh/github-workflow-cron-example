@@ -33,13 +33,20 @@ The configured Page ID defaults to `1992170297687244`. You can override it with 
 Actions variable `FACEBOOK_PAGE_ID`. The public site defaults to
 `https://www.byterminal.com` and can be changed with the `SITE_PUBLIC_URL` variable.
 
-The share uses the CMS public URL and a message made from the article title and short
-excerpt. If the CMS responds with only a slug, the URL is built from the article
-category and saved slug. A Facebook error does not undo or fail CMS publishing: the
-link remains in a category-specific, cached outbox and is retried on the next run.
-Already shared links are recorded to avoid posting them again. Without the secret,
-the Facebook step is skipped. Local publishing supports the same environment
-variables in `.secrets/local-post.env`.
+The Facebook photo post contains the article title, `seoDescription` (or `excerpt`
+when absent), and the GitHub-hosted hero image URL already present in the article
+payload. Meta fetches that public image directly; this step does not query or update
+the CMS database. A first comment says `Read the full article: <public URL>`. If the
+CMS responds with only a slug, the public URL is built from the article category and
+saved slug. The token needs Page posting and commenting permissions, including
+`pages_manage_posts` and `pages_manage_engagement` as applicable.
+
+The cached outbox records the photo before attempting its comment. If commenting
+fails, later runs retry only the comment, not the photo. Each link is attempted at
+most once per run. Older queued link-only items lack a saved hero image, so they are
+left pending rather than re-posted in the wrong format. Already shared link posts
+remain untouched. Without the secret, the Facebook step is skipped. Local publishing
+supports the same environment variables in `.secrets/local-post.env`.
 
 ## Local API key file
 
