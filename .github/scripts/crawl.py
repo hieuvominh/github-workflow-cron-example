@@ -1960,10 +1960,14 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         **editorial_metadata,
         "publish": not bool(MANUAL_ARTICLE_URL),
     }
-    if MANUAL_ARTICLE_URL:
-        article["categorySlug"] = "reviews"
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
+    if MANUAL_ARTICLE_URL:
+        print(
+            "    Manual draft payload: "
+            f"categorySlug={article['categorySlug']}, "
+            f"contentType={article['contentType']}, publish=false"
+        )
 
     post_request = urllib.request.Request(
         f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts",
