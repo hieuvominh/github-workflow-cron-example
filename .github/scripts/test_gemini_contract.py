@@ -83,6 +83,23 @@ class GeminiSEOKeywordContractTests(unittest.TestCase):
             any("seoKeywords" in issue for issue in rewriter._writer_contract_issues(result))
         )
 
+    def test_affiliate_decisions_require_every_candidate_and_unknowns_are_ignored(self):
+        candidates = [
+            {"id": "B0F7K3FQN1", "name": "Samsung Galaxy Z Fold 7", "asin": "B0F7K3FQN1"},
+            {"id": "B000000000", "name": "Unrelated accessory", "asin": "B000000000"},
+        ]
+        self.assertIsNone(rewriter._matched_affiliate_decisions(candidates, {
+            "affiliateProducts": [{"id": "B0F7K3FQN1", "related": True}]
+        }))
+        decisions = rewriter._matched_affiliate_decisions(candidates, {
+            "affiliateProducts": [
+                {"id": "B0F7K3FQN1", "related": True},
+                {"id": "B000000000", "related": False},
+                {"id": "UNKNOWN", "related": True},
+            ]
+        })
+        self.assertEqual([item["related"] for item in decisions], [True, False])
+
 
 if __name__ == "__main__":
     unittest.main()

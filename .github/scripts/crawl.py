@@ -22,10 +22,13 @@ from PIL import Image
 
 from gemini_rewriter import rewrite_article
 from facebook_publisher import enqueue_published_article, flush_pending_shares
+from manual_review import source_article_title, validate_manual_review_url
+from review_affiliates import amazon_affiliate_url, extract_techradar_amazon_candidates
 from responsive_images import make_responsive_variants
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
+MANUAL_ARTICLE_URL = os.environ.get("MANUAL_ARTICLE_URL", "").strip()
 RAW_FEED_URLS = (
     os.environ.get("FEED_URLS", "").strip()
     or os.environ.get("FEED_URL", "").strip()
@@ -1804,8 +1807,15 @@ def extract_blocks(downloaded, article_url):
     return add_page_media(blocks, hero, videos, recovered)
 
 
-flush_pending_shares()
-articles = collect_articles()
+if MANUAL_ARTICLE_URL:
+    if CATEGORY_SLUG != "reviews":
+        raise SystemExit("Manual URL mode is currently only supported for reviews")
+    manual_url = validate_manual_review_url(MANUAL_ARTICLE_URL)
+    print(f"Manual review draft mode: {manual_url}")
+    articles = [("", manual_url, None)]
+else:
+    flush_pending_shares()
+    articles = collect_articles()
 if not articles:
     scope = (
         f" from the last {PUBLISHED_WITHIN_HOURS} hours"
@@ -1816,6 +1826,7 @@ if not articles:
     raise SystemExit(0)
 
 existing_urls = existing_article_urls([url for _, url, _ in articles])
+saved_manual_draft = False
 
 for number, (title, url, published_at) in enumerate(articles, 1):
     if url in existing_urls:
@@ -1826,9 +1837,16 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if not downloaded:
         print(f"{number:02}. Skipped: could not download {url}")
         continue
+    if MANUAL_ARTICLE_URL:
+        title = source_article_title(downloaded)
     if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
+    affiliate_candidates = (
+        extract_techradar_amazon_candidates(downloaded, url)
+        if CATEGORY_SLUG == "reviews"
+        else []
+    )
     downloaded = remove_source_blocked_content(downloaded, url)
     blocks = extract_blocks(downloaded, url)
     text_blocks = [
@@ -1875,12 +1893,15 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         continue
 
     try:
+        affiliate_decisions = []
         title, excerpt, blocks, editorial_metadata = rewrite_article(
             title,
             url,
             blocks,
             CATEGORY_SLUG,
             published_at,
+            affiliate_candidates=affiliate_candidates,
+            affiliate_decisions_out=affiliate_decisions,
         )
     except Exception as error:
         print(f"{number:02}. Skipped: Gemini rewrite failed for {url}: {error}")
@@ -1937,7 +1958,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         "blocks": uploaded_blocks[:500],
         "categorySlug": CATEGORY_SLUG,
         **editorial_metadata,
-        "publish": True,
+        "publish": not bool(MANUAL_ARTICLE_URL),
     }
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
@@ -1969,5 +1990,40 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         f"    Extracted: {len(clean_text)} characters, {image_count} images\n"
         f"    CMS: {result}"
     )
-    enqueue_published_article(result, article)
+    if MANUAL_ARTICLE_URL and (result.get("ok") is not True or result.get("status") != "draft"):
+        raise RuntimeError(f"Manual review was not confirmed as draft by CMS: {result}")
+    if MANUAL_ARTICLE_URL:
+        saved_manual_draft = True
+    related_products = [item for item in affiliate_decisions if item["related"]]
+    if affiliate_candidates:
+        print(
+            "    Experimental TechRadar Amazon matches: "
+            f"{len(related_products)}/{len(affiliate_candidates)}"
+        )
+        if related_products:
+            proposal = {
+                "affiliateProducts": [
+                    {
+                        "name": item["name"],
+                        "merchant": "amazon.com",
+                        "asin": item["asin"],
+                        "affiliateUrl": amazon_affiliate_url(item["asin"]),
+                        "price": None,
+                        "currency": None,
+                    }
+                    for item in related_products
+                ],
+            }
+            print("    Proposed /api/crawler/posts extension (not sent to CMS): " + json.dumps(proposal))
+            for item in related_products:
+                if item.get("sourceObservedPrice"):
+                    print(
+                        "    Source-widget price for diagnostic use only "
+                        f"({item['asin']}): " + json.dumps(item["sourceObservedPrice"])
+                    )
+    if not MANUAL_ARTICLE_URL:
+        enqueue_published_article(result, article)
     time.sleep(1)
+
+if MANUAL_ARTICLE_URL and not saved_manual_draft:
+    raise SystemExit("Manual review draft was not created; inspect the skip/error above")

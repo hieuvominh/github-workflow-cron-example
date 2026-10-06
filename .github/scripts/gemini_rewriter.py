@@ -202,6 +202,17 @@ RESPONSE_SCHEMA = {
                 "specifications",
             ],
         },
+        "affiliateProducts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "related": {"type": "boolean"},
+                },
+                "required": ["id", "related"],
+            },
+        },
         "blocks": {
             "type": "array",
             "items": {
@@ -538,6 +549,7 @@ def _build_prompt(
     source_blocks,
     source_images,
     raw_content,
+    affiliate_candidates=None,
 ):
     source_payload = {
         "extractionMode": extraction_mode,
@@ -551,6 +563,8 @@ def _build_prompt(
         source_payload["blocks"] = source_blocks
     else:
         source_payload["content"] = raw_content
+    if affiliate_candidates:
+        source_payload["affiliateCandidates"] = affiliate_candidates
 
     review_rules = ""
     if CONTENT_TYPE_LOCK == "review":
@@ -572,6 +586,12 @@ Review workflow rules:
 - componentScores may also be inferred from qualitative evidence for that specific dimension. Include only dimensions the source discusses meaningfully. A component score must agree with the source's praise, criticism and caveats; it does not require an exact source number.
 - Keep scores measured and internally consistent: strong praise with minor caveats should score higher than a mixed verdict, while serious flaws or poor value should materially lower the relevant score. Do not use a perfect 10 unless the source evidence is exceptionally strong.
 - Editorial scores are allowed estimates. They must never be described as a benchmark, measurement, source-issued rating or result of BYTERMINAL hands-on testing.
+"""
+        if affiliate_candidates:
+            review_rules += """
+- Experimental affiliate matching: return affiliateProducts with exactly one decision per affiliateCandidates id.
+- Set related=true only when the candidate is the exact product reviewed (including a clear color/storage variant of that same model). Competitors, predecessors, accessories, bundles, generic deals, and uncertain matches are false.
+- These candidates are commerce metadata only. Never insert their names, links, prices, or affiliate copy into article blocks or SEO fields merely because they are supplied here.
 """
     elif CONTENT_TYPE_LOCK:
         review_rules = f'\n- contentType must be "{CONTENT_TYPE_LOCK}".\n'
@@ -627,6 +647,7 @@ How the Writer works, so you do not misread its output:
 - In reviews, a block with drop=true intentionally removes non-editorial, redundant or source-identifying material. Do not treat that removal as missing context or an unsupported claim.
 - In every category, drop=true intentionally removes contamination or content unrelated to the primary subject. Image decisions with keep=false intentionally remove irrelevant, decorative, duplicate or contamination images; do not treat these removals as missing content.
 - For reviews, overallScore and componentScores are BYTERMINAL editorial judgements inferred from the source's qualitative evidence. Their exact numbers usually will not appear in the source, and that is intentional.
+- If affiliateCandidates are supplied, affiliateProducts is a separate product-identity decision, not article copy. Ignore it when checking article boilerplate or unsupported claims; never request its insertion into article text.
 
 Block publication only on these two, and put each finding in the matching array:
 - unsupportedClaims: a factual statement in the Writer JSON the source does not support - an invented name, date, price, quote, link, first-hand test or measurement, or a factual number or date changed from the source. Review scores are the explicit exception described below.
@@ -952,7 +973,20 @@ def _request_with_rotation(prompt, api_keys, response_schema=RESPONSE_SCHEMA, te
     raise RuntimeError("All Gemini keys failed (" + ", ".join(errors) + ")")
 
 
-def rewrite_article(title, source_url, blocks, category_slug, published_at=None):
+def _matched_affiliate_decisions(candidates, result):
+    expected = {item["id"] for item in candidates}
+    decisions = result.get("affiliateProducts") or []
+    by_id = {}
+    for item in decisions:
+        if isinstance(item, dict) and item.get("id") in expected and item.get("id") not in by_id:
+            by_id[item["id"]] = item.get("related") is True
+    if set(by_id) != expected:
+        return None
+    return [{**candidate, "related": by_id[candidate["id"]]} for candidate in candidates]
+
+
+def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
+                    affiliate_candidates=None, affiliate_decisions_out=None):
     api_keys = load_api_keys()
     category_prompt = load_category_prompt(category_slug)
     blocks = sanitize_source_blocks(blocks, source_url)
@@ -982,6 +1016,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         source_blocks,
         source_images,
         raw_content,
+        affiliate_candidates,
     )
     result = _request_with_rotation(prompt, api_keys)
 
@@ -991,6 +1026,8 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
         "categorySlug": category_slug,
         "blocks": source_blocks,
     }
+    if affiliate_candidates:
+        validation_source["affiliateCandidates"] = affiliate_candidates
     contract_issues = _writer_contract_issues(result)
     if contract_issues:
         validation = {
@@ -1288,5 +1325,12 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None)
             ][:30],
         }
         metadata["affiliateDisclosure"] = True
+
+    if affiliate_candidates and affiliate_decisions_out is not None:
+        decisions = _matched_affiliate_decisions(affiliate_candidates, result)
+        if decisions is not None:
+            affiliate_decisions_out.extend(decisions)
+        else:
+            print("    Gemini affiliate matching incomplete; skipping all product proposals")
 
     return rewritten_title, rewritten_excerpt, rewritten_blocks, metadata
