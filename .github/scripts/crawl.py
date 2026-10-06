@@ -307,9 +307,9 @@ if not SOURCE_FEED_URLS and not MANUAL_ARTICLE_URL:
     )
     raise SystemExit(0)
 
+if not BYTEKORA_URL or not INGEST_SECRET:
+    raise SystemExit("BYTEKORA_URL or INGEST_SECRET is missing")
 if not MANUAL_ARTICLE_URL:
-    if not BYTEKORA_URL or not INGEST_SECRET:
-        raise SystemExit("BYTEKORA_URL or INGEST_SECRET is missing")
     if not MEDIA_REPO or "/" not in MEDIA_REPO or not MEDIA_TOKEN:
         raise SystemExit("MEDIA_REPO or MEDIA_TOKEN is missing")
 
@@ -1500,7 +1500,7 @@ def collect_articles():
     return articles
 
 
-def article_exists(source_url):
+def article_exists(source_url, *, require_preflight=False):
     query = urllib.parse.urlencode({"externalSourceID": source_url})
     request = urllib.request.Request(
         f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts?{query}",
@@ -1509,9 +1509,13 @@ def article_exists(source_url):
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.loads(response.read())
+            if require_preflight and not isinstance(result.get("exists"), bool):
+                raise RuntimeError("Manual duplicate check returned no exists flag; preview stopped")
             return bool(result.get("exists"))
     except urllib.error.HTTPError as error:
         if error.code in (404, 405):
+            if require_preflight:
+                raise RuntimeError("Manual duplicate check is unavailable; preview stopped") from error
             print("    Duplicate preflight is unavailable; POST fallback will be used")
             return False
         raise
@@ -1829,7 +1833,8 @@ if not articles:
     raise SystemExit(0)
 
 existing_urls = (
-    set() if MANUAL_ARTICLE_URL
+    {url for _, url, _ in articles if article_exists(url, require_preflight=True)}
+    if MANUAL_ARTICLE_URL
     else existing_article_urls([url for _, url, _ in articles])
 )
 manual_preview_completed = False

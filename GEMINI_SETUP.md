@@ -99,8 +99,9 @@ calling Gemini; duplicate drafts stop without using a Gemini key.
 
 The GitHub Actions job **Manual Review Preview** accepts one HTTPS TechRadar URL.
 It runs extraction and Gemini review/product matching, then prints a proposed
-`affiliateProducts` payload. It does not query or post to the CMS, upload images,
-or publish to Facebook. The former manual draft flow is disabled because the
+`affiliateProducts` payload. It makes one read-only CMS duplicate check and stops
+before Gemini if the source URL already exists. It does not post to the CMS,
+upload images, or publish to Facebook. The former manual draft flow is disabled because the
 CMS returned `status: published` even when sent `publish: false`. Do not restore
 CMS writes until a draft-capable API is confirmed and tested.
 

@@ -38,6 +38,8 @@ jobs:
           CATEGORY_PROMPT_FILE: .github/prompts/reviews.txt
           CONTENT_TYPE_LOCK: review
           DYNAMIC_PRIMARY_CATEGORY: "true"
+          BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
+          INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GEMINI_MODEL: gemini-2.5-flash
           GEMINI_FALLBACK_MODELS: gemini-3.5-flash-lite,gemini-3.1-flash-lite
