@@ -309,9 +309,8 @@ if not SOURCE_FEED_URLS and not MANUAL_ARTICLE_URL:
 
 if not BYTEKORA_URL or not INGEST_SECRET:
     raise SystemExit("BYTEKORA_URL or INGEST_SECRET is missing")
-if not MANUAL_ARTICLE_URL:
-    if not MEDIA_REPO or "/" not in MEDIA_REPO or not MEDIA_TOKEN:
-        raise SystemExit("MEDIA_REPO or MEDIA_TOKEN is missing")
+if not MEDIA_REPO or "/" not in MEDIA_REPO or not MEDIA_TOKEN:
+    raise SystemExit("MEDIA_REPO or MEDIA_TOKEN is missing")
 
 
 def tag_name(element):
@@ -1818,7 +1817,7 @@ if MANUAL_ARTICLE_URL:
     if CATEGORY_SLUG != "reviews":
         raise SystemExit("Manual URL mode is currently only supported for reviews")
     manual_url = validate_manual_review_url(MANUAL_ARTICLE_URL)
-    print(f"Manual review preview mode: {manual_url}")
+    print(f"Manual review draft mode: {manual_url}")
     articles = [("", manual_url, None)]
 else:
     flush_pending_shares()
@@ -1837,7 +1836,7 @@ existing_urls = (
     if MANUAL_ARTICLE_URL
     else existing_article_urls([url for _, url, _ in articles])
 )
-manual_preview_completed = False
+manual_draft_created = False
 
 for number, (title, url, published_at) in enumerate(articles, 1):
     if url in existing_urls:
@@ -1920,7 +1919,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
 
     if MANUAL_ARTICLE_URL:
         related_products = [item for item in affiliate_decisions if item["related"]]
-        preview = {
+        affiliate_proposal = {
             "sourceUrl": url,
             "title": title,
             "categorySlug": editorial_metadata.get("categorySlug", CATEGORY_SLUG),
@@ -1931,16 +1930,13 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             "    Experimental TechRadar Amazon matches: "
             f"{len(related_products)}/{len(affiliate_candidates)}"
         )
-        print("    Manual review preview (nothing sent to CMS): " + json.dumps(preview))
+        print("    Experimental affiliate proposal (not sent to CMS): " + json.dumps(affiliate_proposal))
         for item in related_products:
             if item.get("sourceObservedPrice"):
                 print(
                     "    Source-widget price for diagnostic use only "
                     f"({item['asin']}): " + json.dumps(item["sourceObservedPrice"])
                 )
-        print("    CMS draft creation is disabled until its draft API is confirmed; no images or articles uploaded")
-        manual_preview_completed = True
-        continue
 
     uploaded_blocks = []
     image_count = 0
@@ -1997,6 +1993,12 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     }
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
+    if MANUAL_ARTICLE_URL:
+        print(
+            "    Manual draft payload: "
+            f"categorySlug={article['categorySlug']}, "
+            f"contentType={article['contentType']}, publish={article['publish']}"
+        )
 
     post_request = urllib.request.Request(
         f"{BYTEKORA_URL.rstrip('/')}/api/crawler/posts",
@@ -2027,7 +2029,11 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     )
     if not MANUAL_ARTICLE_URL:
         enqueue_published_article(result, article)
+    else:
+        if result.get("ok") is not True or result.get("status") != "draft":
+            raise RuntimeError(f"Manual review was not confirmed as draft by CMS: {result}")
+        manual_draft_created = True
     time.sleep(1)
 
-if MANUAL_ARTICLE_URL and not manual_preview_completed:
-    raise SystemExit("Manual review preview was not created; inspect the skip/error above")
+if MANUAL_ARTICLE_URL and not manual_draft_created:
+    raise SystemExit("Manual review draft was not created; inspect the skip/error above")
