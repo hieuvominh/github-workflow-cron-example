@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       article_url:
-        description: HTTPS TechRadar review article URL
+        description: HTTPS review URL from TechRadar, The Verge, IGN, CNET, or Tech Guide
         required: true
         type: string
 

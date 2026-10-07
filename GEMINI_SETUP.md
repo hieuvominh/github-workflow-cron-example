@@ -97,16 +97,19 @@ calling Gemini; duplicate drafts stop without using a Gemini key.
 
 ## Editorial prompts and validation
 
-The GitHub Actions job **Manual Review Draft** accepts one HTTPS TechRadar URL.
+The GitHub Actions job **Manual Review Draft** accepts one HTTPS review URL from
+TechRadar, The Verge, IGN, CNET, or Tech Guide Australia.
 It checks the CMS for a duplicate source URL before Gemini, then extracts and
 rewrites the review, uploads its images, and sends it to the CMS with
 `publish: false`. The job succeeds only if the CMS confirms `status: draft`.
-It does not publish to Facebook. For TechRadar reviews, it sends only Gemini-matched
-Amazon products in `affiliateProducts` with the draft payload.
+It does not publish to Facebook. For all five sources, it sends only Gemini-matched
+Amazon.com products in `affiliateProducts` with the draft payload. If a source
+article has no identifiable Amazon.com product link, the draft still proceeds
+with an empty product list.
 
 Each `affiliateProducts` entry has `name`, `merchant`, `asin`, a direct link tagged
-`byterminal-20`, and a price/currency snapshot from the matching TechRadar card
-when present. Missing prices remain null; a source-card price is not a live Amazon quote.
+`byterminal-20`, and a price/currency snapshot from a matching source product
+link or card when present. Missing prices remain null; source prices are not live Amazon quotes.
 
 The shared production policy lives in `.github/scripts/gemini_rewriter.py`. It applies two layers:
 deterministic source cleanup, followed by a Gemini writer and an independent Gemini validator. A

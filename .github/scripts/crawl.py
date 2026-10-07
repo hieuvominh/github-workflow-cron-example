@@ -23,7 +23,7 @@ from PIL import Image
 from gemini_rewriter import rewrite_article
 from facebook_publisher import enqueue_published_article, flush_pending_shares
 from manual_review import source_article_title, validate_manual_review_url
-from review_affiliates import affiliate_product_payload, extract_techradar_amazon_candidates
+from review_affiliates import affiliate_product_payload, extract_review_amazon_candidates
 from responsive_images import make_responsive_variants
 
 
@@ -1509,12 +1509,12 @@ def article_exists(source_url, *, require_preflight=False):
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.loads(response.read())
             if require_preflight and not isinstance(result.get("exists"), bool):
-                raise RuntimeError("Manual duplicate check returned no exists flag; preview stopped")
+                raise RuntimeError("Manual duplicate check returned no exists flag; draft stopped")
             return bool(result.get("exists"))
     except urllib.error.HTTPError as error:
         if error.code in (404, 405):
             if require_preflight:
-                raise RuntimeError("Manual duplicate check is unavailable; preview stopped") from error
+                raise RuntimeError("Manual duplicate check is unavailable; draft stopped") from error
             print("    Duplicate preflight is unavailable; POST fallback will be used")
             return False
         raise
@@ -1853,7 +1853,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
     affiliate_candidates = (
-        extract_techradar_amazon_candidates(downloaded, url)
+        extract_review_amazon_candidates(downloaded, url)
         if MANUAL_ARTICLE_URL and CATEGORY_SLUG == "reviews"
         else []
     )
@@ -1922,7 +1922,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         related_products = [item for item in affiliate_decisions if item["related"]]
         affiliate_products = affiliate_product_payload(affiliate_decisions)
         print(
-            "    Experimental TechRadar Amazon matches: "
+            "    Manual review Amazon matches: "
             f"{len(related_products)}/{len(affiliate_candidates)}"
         )
         print("    Affiliate products for CMS: " + json.dumps(affiliate_products))
