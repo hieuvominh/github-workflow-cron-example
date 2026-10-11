@@ -23,7 +23,8 @@ _attempted_comments = set()
 
 
 def configured():
-    return bool(
+    sharing_enabled = os.environ.get("FACEBOOK_SHARING_ENABLED", "").strip().lower() == "true"
+    return sharing_enabled and bool(
         os.environ.get("FACEBOOK_PAGE_ID", "").strip()
         and os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
     )
@@ -225,6 +226,9 @@ def _photo_post_id(photo_id):
 
 def flush_pending_shares():
     """Publish each photo once, then independently retry its first comment."""
+    if os.environ.get("FACEBOOK_SHARING_ENABLED", "").strip().lower() != "true":
+        print("    Facebook sharing is paused; pending shares are unchanged")
+        return
     if not configured():
         return
     try:

@@ -143,6 +143,10 @@ slug and publication time. The source publication date is context only and is no
 
 ## Repository variables
 
+- Facebook sharing is temporarily paused. `FACEBOOK_SHARING_ENABLED` defaults to
+  off, so scheduled crawls continue to publish to the CMS without enqueuing or
+  posting to Facebook. Existing pending share state is preserved. Re-enable only
+  by explicitly setting `FACEBOOK_SHARING_ENABLED=true` for the crawler jobs.
 - `MEDIA_REPO`
 - `MEDIA_BRANCH` (defaults to `main`)
 - The GitHub Actions workflows prefer `gemini-2.5-flash` per API key and fall back to `gemini-3.6-flash` only when that key's project cannot access 2.5. The last successful key and each key's model preference are saved in GitHub Actions cache; no API key value is stored there.

@@ -19,6 +19,7 @@ class FacebookPublisherTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.state_file = Path(self.temp.name) / "facebook-state.json"
         self.environment = patch.dict(os.environ, {
+            "FACEBOOK_SHARING_ENABLED": "true",
             "FACEBOOK_PAGE_ID": "1992170297687244",
             "FACEBOOK_PAGE_ACCESS_TOKEN": "test-token-not-real",
             "FACEBOOK_SHARE_STATE_FILE": str(self.state_file),
@@ -40,6 +41,21 @@ class FacebookPublisherTests(unittest.TestCase):
             "categorySlug": "ai",
         }
         self.result = {"ok": True, "status": "published", "slug": "example-123"}
+
+    def test_pause_does_not_enqueue_or_flush_existing_shares(self):
+        self.state_file.write_text(json.dumps({
+            "pending": {"https://www.byterminal.com/ai/old": {
+                "image_url": self.article["heroImageUrl"], "caption": "Old article"
+            }},
+            "posted": {},
+        }), encoding="utf-8")
+        before = self.state_file.read_text(encoding="utf-8")
+        with patch.dict(os.environ, {"FACEBOOK_SHARING_ENABLED": "false"}), \
+             patch.object(publisher, "_post_photo") as post:
+            publisher.flush_pending_shares()
+            publisher.enqueue_published_article(self.result, self.article)
+        post.assert_not_called()
+        self.assertEqual(self.state_file.read_text(encoding="utf-8"), before)
 
     def test_builds_url_from_saved_cms_slug(self):
         self.assertEqual(
