@@ -29,11 +29,22 @@ from review_affiliates import (
     in_review_affiliate_sample,
     review_publication_fields,
 )
+from review_source_trial import (
+    is_trial_review_url,
+    prepare_trial_review_html,
+    trial_article_body_node,
+    trial_feed_urls,
+    validate_trial_review_url,
+)
 from responsive_images import make_responsive_variants
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
 MANUAL_ARTICLE_URL = os.environ.get("MANUAL_ARTICLE_URL", "").strip()
+REVIEW_SOURCE_TRIAL_MODE = os.environ.get("REVIEW_SOURCE_TRIAL_MODE", "").lower() in {
+    "1", "true", "yes"
+}
+REVIEW_SOURCE_TRIAL_SOURCE = os.environ.get("REVIEW_SOURCE_TRIAL_SOURCE", "all").strip().lower()
 REVIEW_AFFILIATE_SAMPLE_PERCENT = int(
     os.environ.get("REVIEW_AFFILIATE_SAMPLE_PERCENT", "0")
 )
@@ -50,6 +61,10 @@ SOURCE_FEED_URLS = list(
         if value.strip()
     )
 )
+if REVIEW_SOURCE_TRIAL_MODE:
+    if CATEGORY_SLUG != "reviews":
+        raise ValueError("Review source trial is only available for reviews")
+    SOURCE_FEED_URLS = trial_feed_urls(REVIEW_SOURCE_TRIAL_SOURCE)
 BYTEKORA_URL = os.environ.get("BYTEKORA_URL", "")
 INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 MEDIA_REPO = os.environ.get("MEDIA_REPO", "")
@@ -594,6 +609,10 @@ def article_body_node(document, article_url=None):
         nodes = document.xpath(xpath)
         if nodes:
             return nodes[0]
+    if REVIEW_SOURCE_TRIAL_MODE and article_url:
+        trial_body = trial_article_body_node(document, article_url)
+        if trial_body is not None:
+            return trial_body
     host = urllib.parse.urlsplit(article_url or "").netloc.lower().split(":", 1)[0]
     if host == "cnet.com" or host.endswith(".cnet.com"):
         # CNET's WordPress detail pages keep the actual story in .entry-content;
@@ -1454,6 +1473,11 @@ def collect_articles():
                 if not title or not url or url in seen_urls:
                     continue
 
+                if REVIEW_SOURCE_TRIAL_MODE and not is_trial_review_url(
+                    url, REVIEW_SOURCE_TRIAL_SOURCE
+                ):
+                    continue
+
                 promotion = promotional_reason(title, url, article.get("labels", []))
                 if promotion:
                     print(f"Skipped promotional feed item ({promotion}): {title} — {url}")
@@ -1826,11 +1850,16 @@ def extract_blocks(downloaded, article_url):
 if MANUAL_ARTICLE_URL:
     if CATEGORY_SLUG != "reviews":
         raise SystemExit("Manual URL mode is currently only supported for reviews")
-    manual_url = validate_manual_review_url(MANUAL_ARTICLE_URL)
-    print(f"Manual review draft mode: {manual_url}")
+    manual_url = (
+        validate_trial_review_url(MANUAL_ARTICLE_URL, REVIEW_SOURCE_TRIAL_SOURCE)
+        if REVIEW_SOURCE_TRIAL_MODE
+        else validate_manual_review_url(MANUAL_ARTICLE_URL)
+    )
+    print(f"Review draft mode: {manual_url}")
     articles = [("", manual_url, None)]
 else:
-    flush_pending_shares()
+    if not REVIEW_SOURCE_TRIAL_MODE:
+        flush_pending_shares()
     articles = collect_articles()
 if not articles:
     scope = (
@@ -1857,12 +1886,18 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if not downloaded:
         print(f"{number:02}. Skipped: could not download {url}")
         continue
+    if REVIEW_SOURCE_TRIAL_MODE:
+        try:
+            downloaded = prepare_trial_review_html(downloaded, url, fetch_article_html)
+        except (ValueError, TypeError, lxml_html.etree.ParserError) as error:
+            print(f"{number:02}. Skipped incomplete review: {url}: {error}")
+            continue
     if MANUAL_ARTICLE_URL:
         title = source_article_title(downloaded)
     if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
-    affiliate_trial = CATEGORY_SLUG == "reviews" and (
+    affiliate_trial = CATEGORY_SLUG == "reviews" and not REVIEW_SOURCE_TRIAL_MODE and (
         bool(MANUAL_ARTICLE_URL)
         or in_review_affiliate_sample(url, REVIEW_AFFILIATE_SAMPLE_PERCENT)
     )
@@ -1993,7 +2028,9 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         "blocks": uploaded_blocks[:500],
         "categorySlug": CATEGORY_SLUG,
         **editorial_metadata,
-        **review_publication_fields(MANUAL_ARTICLE_URL, affiliate_products),
+        **review_publication_fields(
+            MANUAL_ARTICLE_URL or REVIEW_SOURCE_TRIAL_MODE, affiliate_products
+        ),
     }
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
