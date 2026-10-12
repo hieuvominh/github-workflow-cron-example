@@ -5,11 +5,35 @@ from review_affiliates import (
     amazon_affiliate_url,
     extract_review_amazon_candidates,
     extract_techradar_amazon_candidates,
+    in_review_affiliate_sample,
+    review_publication_fields,
 )
 
 
 class ReviewAffiliatesTests(unittest.TestCase):
     SOURCE = "https://www.techradar.com/phones/samsung-galaxy-phones/example-review"
+
+    def test_automatic_sample_is_stable_and_near_thirty_percent(self):
+        urls = [f"https://www.techradar.com/reviews/product-{index}" for index in range(1000)]
+        first = [url for url in urls if in_review_affiliate_sample(url, 30)]
+        self.assertEqual(first, [url for url in urls if in_review_affiliate_sample(url, 30)])
+        self.assertTrue(250 <= len(first) <= 350)
+        self.assertFalse(in_review_affiliate_sample(self.SOURCE, 0))
+        self.assertTrue(in_review_affiliate_sample(self.SOURCE, 100))
+
+    def test_only_matched_affiliate_reviews_become_automatic_drafts(self):
+        product = {"asin": "B0H8N49DSC", "affiliateUrl": amazon_affiliate_url("B0H8N49DSC")}
+        self.assertEqual(review_publication_fields(False, []), {"publish": True})
+        unrelated = affiliate_product_payload([
+            {"name": "Unrelated accessory", "asin": "B000000000", "related": False},
+        ])
+        self.assertEqual(review_publication_fields(False, unrelated), {"publish": True})
+        self.assertEqual(review_publication_fields(False, [product]), {
+            "publish": False, "affiliateProducts": [product],
+        })
+        self.assertEqual(review_publication_fields(True, []), {
+            "publish": False, "affiliateProducts": [],
+        })
 
     def test_extracts_deduplicated_amazon_product_and_removes_source_tag(self):
         source_link = (

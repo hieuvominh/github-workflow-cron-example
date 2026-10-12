@@ -23,12 +23,22 @@ from PIL import Image
 from gemini_rewriter import rewrite_article
 from facebook_publisher import enqueue_published_article, flush_pending_shares
 from manual_review import source_article_title, validate_manual_review_url
-from review_affiliates import affiliate_product_payload, extract_review_amazon_candidates
+from review_affiliates import (
+    affiliate_product_payload,
+    extract_review_amazon_candidates,
+    in_review_affiliate_sample,
+    review_publication_fields,
+)
 from responsive_images import make_responsive_variants
 
 
 CATEGORY_SLUG = os.environ["CATEGORY_SLUG"]
 MANUAL_ARTICLE_URL = os.environ.get("MANUAL_ARTICLE_URL", "").strip()
+REVIEW_AFFILIATE_SAMPLE_PERCENT = int(
+    os.environ.get("REVIEW_AFFILIATE_SAMPLE_PERCENT", "0")
+)
+if not 0 <= REVIEW_AFFILIATE_SAMPLE_PERCENT <= 100:
+    raise ValueError("REVIEW_AFFILIATE_SAMPLE_PERCENT must be between 0 and 100")
 RAW_FEED_URLS = (
     os.environ.get("FEED_URLS", "").strip()
     or os.environ.get("FEED_URL", "").strip()
@@ -1852,11 +1862,15 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
-    affiliate_candidates = (
-        extract_review_amazon_candidates(downloaded, url)
-        if MANUAL_ARTICLE_URL and CATEGORY_SLUG == "reviews"
-        else []
+    affiliate_trial = CATEGORY_SLUG == "reviews" and (
+        bool(MANUAL_ARTICLE_URL)
+        or in_review_affiliate_sample(url, REVIEW_AFFILIATE_SAMPLE_PERCENT)
     )
+    affiliate_candidates = (
+        extract_review_amazon_candidates(downloaded, url) if affiliate_trial else []
+    )
+    if affiliate_trial and not MANUAL_ARTICLE_URL:
+        print(f"    Review affiliate trial selected: {len(affiliate_candidates)} candidate(s)")
     downloaded = remove_source_blocked_content(downloaded, url)
     blocks = extract_blocks(downloaded, url)
     text_blocks = [
@@ -1918,14 +1932,15 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         continue
 
     affiliate_products = []
-    if MANUAL_ARTICLE_URL:
+    if affiliate_candidates:
         related_products = [item for item in affiliate_decisions if item["related"]]
         affiliate_products = affiliate_product_payload(affiliate_decisions)
         print(
-            "    Manual review Amazon matches: "
+            "    Review Amazon matches: "
             f"{len(related_products)}/{len(affiliate_candidates)}"
         )
-        print("    Affiliate products for CMS: " + json.dumps(affiliate_products))
+        if affiliate_products:
+            print("    Affiliate products for CMS: " + json.dumps(affiliate_products))
 
     uploaded_blocks = []
     image_count = 0
@@ -1978,14 +1993,13 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         "blocks": uploaded_blocks[:500],
         "categorySlug": CATEGORY_SLUG,
         **editorial_metadata,
-        "publish": not bool(MANUAL_ARTICLE_URL),
+        **review_publication_fields(MANUAL_ARTICLE_URL, affiliate_products),
     }
     if hero_image:
         article["heroImageUrl"] = hero_image["url"]
-    if MANUAL_ARTICLE_URL:
-        article["affiliateProducts"] = affiliate_products
+    if not article["publish"]:
         print(
-            "    Manual draft payload: "
+            "    Review draft payload: "
             f"categorySlug={article['categorySlug']}, "
             f"contentType={article['contentType']}, publish={article['publish']}, "
             f"affiliateProducts={len(article['affiliateProducts'])}"
@@ -2018,12 +2032,13 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         f"    Extracted: {len(clean_text)} characters, {image_count} images\n"
         f"    CMS: {result}"
     )
-    if not MANUAL_ARTICLE_URL:
+    if article["publish"]:
         enqueue_published_article(result, article)
     else:
         if result.get("ok") is not True or result.get("status") != "draft":
-            raise RuntimeError(f"Manual review was not confirmed as draft by CMS: {result}")
-        manual_draft_created = True
+            raise RuntimeError(f"Review was not confirmed as draft by CMS: {result}")
+        if MANUAL_ARTICLE_URL:
+            manual_draft_created = True
     time.sleep(1)
 
 if MANUAL_ARTICLE_URL and not manual_draft_created:

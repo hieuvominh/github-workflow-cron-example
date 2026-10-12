@@ -1,5 +1,6 @@
-"""Manual review-product discovery; never publish source tracking links."""
+"""Review-product discovery for manual and sampled automatic drafts."""
 
+import hashlib
 import re
 import urllib.parse
 import urllib.error
@@ -18,6 +19,23 @@ ASSOCIATE_TAG = "byterminal-20"
 REVIEW_HOSTS = {"theverge.com", "ign.com", "cnet.com", "techguide.com.au"}
 SHORT_LINK_HOSTS = {"zdcs.link", "amzn.to", "r.zdbb.net"}
 REDIRECT_HOSTS = SHORT_LINK_HOSTS | {"cc.ign.com", "cc.cnet.com", "amazon.com", "www.amazon.com"}
+
+
+def in_review_affiliate_sample(source_url, percent):
+    """Select a stable percentage of URLs for the automatic review trial."""
+    if not 0 <= percent <= 100:
+        raise ValueError("Review affiliate sample percent must be between 0 and 100")
+    bucket = int.from_bytes(hashlib.sha256(source_url.encode("utf-8")).digest()[:8], "big") % 100
+    return bucket < percent
+
+
+def review_publication_fields(manual_mode, affiliate_products):
+    """Only matched affiliate reviews (or manual runs) are sent as drafts."""
+    draft = bool(manual_mode or affiliate_products)
+    fields = {"publish": not draft}
+    if draft:
+        fields["affiliateProducts"] = affiliate_products
+    return fields
 
 
 def amazon_affiliate_url(asin):
