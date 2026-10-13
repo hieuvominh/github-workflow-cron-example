@@ -50,11 +50,14 @@ REVIEW_DRAFT_ALL = os.environ.get("REVIEW_DRAFT_ALL", "").lower() in {
 if REVIEW_DRAFT_ALL and CATEGORY_SLUG != "reviews":
     raise ValueError("REVIEW_DRAFT_ALL is only available for reviews")
 REVIEW_SOURCE_TRIAL_SOURCE = os.environ.get("REVIEW_SOURCE_TRIAL_SOURCE", "all").strip().lower()
-REVIEW_AFFILIATE_SAMPLE_PERCENT = int(
-    os.environ.get("REVIEW_AFFILIATE_SAMPLE_PERCENT", "0")
+AFFILIATE_SAMPLE_PERCENT = int(
+    os.environ.get(
+        "AFFILIATE_SAMPLE_PERCENT",
+        os.environ.get("REVIEW_AFFILIATE_SAMPLE_PERCENT", "0"),
+    )
 )
-if not 0 <= REVIEW_AFFILIATE_SAMPLE_PERCENT <= 100:
-    raise ValueError("REVIEW_AFFILIATE_SAMPLE_PERCENT must be between 0 and 100")
+if not 0 <= AFFILIATE_SAMPLE_PERCENT <= 100:
+    raise ValueError("AFFILIATE_SAMPLE_PERCENT must be between 0 and 100")
 RAW_FEED_URLS = (
     os.environ.get("FEED_URLS", "").strip()
     or os.environ.get("FEED_URL", "").strip()
@@ -1902,15 +1905,15 @@ for number, (title, url, published_at) in enumerate(articles, 1):
     if not source_vertical_allowed(downloaded, url):
         print(f"{number:02}. Skipped outside {CATEGORY_SLUG}: {url}")
         continue
-    affiliate_trial = CATEGORY_SLUG == "reviews" and not REVIEW_SOURCE_TRIAL_MODE and (
+    affiliate_trial = CATEGORY_SLUG in {"reviews", "gadgets"} and not REVIEW_SOURCE_TRIAL_MODE and (
         bool(MANUAL_ARTICLE_URL)
-        or in_review_affiliate_sample(url, REVIEW_AFFILIATE_SAMPLE_PERCENT)
+        or in_review_affiliate_sample(url, AFFILIATE_SAMPLE_PERCENT)
     )
     affiliate_candidates = (
         extract_review_amazon_candidates(downloaded, url) if affiliate_trial else []
     )
     if affiliate_trial and not MANUAL_ARTICLE_URL:
-        print(f"    Review affiliate trial selected: {len(affiliate_candidates)} candidate(s)")
+        print(f"    Affiliate matching selected: {len(affiliate_candidates)} candidate(s)")
     downloaded = remove_source_blocked_content(downloaded, url)
     blocks = extract_blocks(downloaded, url)
     text_blocks = [
@@ -1976,10 +1979,11 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         related_products = [item for item in affiliate_decisions if item["related"]]
         affiliate_products = affiliate_product_payload(affiliate_decisions)
         print(
-            "    Review Amazon matches: "
+            "    Amazon product matches: "
             f"{len(related_products)}/{len(affiliate_candidates)}"
         )
         if affiliate_products:
+            editorial_metadata["affiliateDisclosure"] = True
             print("    Affiliate products for CMS: " + json.dumps(affiliate_products))
 
     uploaded_blocks = []
@@ -2042,7 +2046,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         article["heroImageUrl"] = hero_image["url"]
     if not article["publish"]:
         print(
-            "    Review draft payload: "
+            "    Affiliate/draft payload: "
             f"categorySlug={article['categorySlug']}, "
             f"contentType={article['contentType']}, publish={article['publish']}, "
             f"affiliateProducts={len(article['affiliateProducts'])}"
@@ -2079,7 +2083,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         enqueue_published_article(result, article)
     else:
         if result.get("ok") is not True or result.get("status") != "draft":
-            raise RuntimeError(f"Review was not confirmed as draft by CMS: {result}")
+            raise RuntimeError(f"Article was not confirmed as draft by CMS: {result}")
         if MANUAL_ARTICLE_URL:
             manual_draft_created = True
     time.sleep(1)

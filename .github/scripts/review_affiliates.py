@@ -1,4 +1,4 @@
-"""Review-product discovery for manual and sampled automatic drafts."""
+"""Product discovery for review and gadget affiliate drafts."""
 
 import hashlib
 import re
@@ -16,21 +16,24 @@ NAME_LABEL = re.compile(r"^View\s+(.+?)\s+on\s+Amazon$", re.I)
 USD_PRICE = re.compile(r"^\$\s*([\d,]+(?:\.\d{2})?)$")
 AMAZON_BUTTON_PRICE = re.compile(r"\$\s*([\d,]+(?:\.\d{2})?)\s+(?:at|on)\s+Amazon\b", re.I)
 ASSOCIATE_TAG = "byterminal-20"
-REVIEW_HOSTS = {"theverge.com", "ign.com", "cnet.com", "techguide.com.au"}
+EDITORIAL_AFFILIATE_HOSTS = {
+    "theverge.com", "ign.com", "cnet.com", "techguide.com.au",
+    "techcrunch.com", "engadget.com",
+}
 SHORT_LINK_HOSTS = {"zdcs.link", "amzn.to", "r.zdbb.net"}
 REDIRECT_HOSTS = SHORT_LINK_HOSTS | {"cc.ign.com", "cc.cnet.com", "amazon.com", "www.amazon.com"}
 
 
 def in_review_affiliate_sample(source_url, percent):
-    """Select a stable percentage of URLs for the automatic review trial."""
+    """Select a stable percentage of URLs for automatic affiliate matching."""
     if not 0 <= percent <= 100:
-        raise ValueError("Review affiliate sample percent must be between 0 and 100")
+        raise ValueError("Affiliate sample percent must be between 0 and 100")
     bucket = int.from_bytes(hashlib.sha256(source_url.encode("utf-8")).digest()[:8], "big") % 100
     return bucket < percent
 
 
 def review_publication_fields(force_draft, affiliate_products):
-    """Draft matched affiliate reviews or every review in a draft-only run."""
+    """Draft matched affiliate articles or everything in a draft-only run."""
     draft = bool(force_draft or affiliate_products)
     fields = {"publish": not draft}
     if draft:
@@ -270,11 +273,11 @@ def _review_button_price(anchor, source_host):
 
 
 def extract_review_amazon_candidates(downloaded, source_url, redirect_resolver=None):
-    """Find Amazon.com products in manual reviews from all configured sources."""
+    """Find Amazon.com products in editorial content from configured sources."""
     source_host = (urllib.parse.urlsplit(source_url).hostname or "").lower().removeprefix("www.")
     if source_host == "techradar.com":
         return extract_techradar_amazon_candidates(downloaded, source_url)
-    if source_host not in REVIEW_HOSTS:
+    if source_host not in EDITORIAL_AFFILIATE_HOSTS:
         return []
     document = lxml_html.fromstring(downloaded)
     resolver = redirect_resolver or _resolve_short_link

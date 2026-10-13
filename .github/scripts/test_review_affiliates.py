@@ -154,6 +154,25 @@ class ReviewAffiliatesTests(unittest.TestCase):
         ])
         self.assertEqual(extract_review_amazon_candidates("<main><article>No product link</article></main>", url), [])
 
+    def test_gadget_sources_use_only_editorial_product_links(self):
+        page = """<main><article><p>
+        <a href="https://www.amazon.com/Kindle-Click/dp/B0H8TBGMBJ?tag=source-20">Kindle Click</a>
+        </p></article><aside><a href="https://www.amazon.com/Other-Gadget/dp/B000000000">Other gadget</a></aside></main>"""
+        expected = [{"id": "B0H8TBGMBJ", "name": "Kindle Click", "asin": "B0H8TBGMBJ"}]
+        for host in ("techcrunch.com", "engadget.com", "theverge.com"):
+            with self.subTest(host=host):
+                self.assertEqual(
+                    extract_review_amazon_candidates(page, f"https://www.{host}/example"),
+                    expected,
+                )
+
+    def test_engadget_short_link_requires_amazon_product(self):
+        page = """<main><article><a href="https://amzn.to/example">Kindle Click</a></article></main>"""
+        resolved = "https://www.amazon.com/Kindle-Click/dp/B0H8TBGMBJ?tag=source-20"
+        self.assertEqual(extract_review_amazon_candidates(
+            page, "https://www.engadget.com/example", lambda _: resolved,
+        ), [{"id": "B0H8TBGMBJ", "name": "Kindle Click", "asin": "B0H8TBGMBJ"}])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,7 @@ jobs:
           PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
+          AFFILIATE_SAMPLE_PERCENT: "100"
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
           INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
           MEDIA_REPO: ${{ vars.MEDIA_REPO }}

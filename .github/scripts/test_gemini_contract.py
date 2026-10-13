@@ -29,6 +29,16 @@ spec.loader.exec_module(rewriter)
 
 
 class GeminiSEOKeywordContractTests(unittest.TestCase):
+    def test_gadget_prompt_requires_primary_product_match(self):
+        prompt = rewriter._build_prompt(
+            "Gadget news", "Kindle Click launches", "https://www.engadget.com/example",
+            "gadgets", None, "structured", [], [], "",
+            [{"id": "B0H8TBGMBJ", "name": "Kindle Click", "asin": "B0H8TBGMBJ"}],
+        )
+        self.assertIn("primary product covered by the article", prompt)
+        self.assertIn("For a roundup without one primary product, set every candidate to false", prompt)
+        self.assertIn("exactly one decision per affiliateCandidates id", prompt)
+
     def test_response_schema_requires_keywords_and_caps_them_at_ten(self):
         keywords = rewriter.RESPONSE_SCHEMA["properties"]["seoKeywords"]
         self.assertIn("seoKeywords", rewriter.RESPONSE_SCHEMA["required"])

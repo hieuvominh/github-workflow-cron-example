@@ -587,14 +587,18 @@ Review workflow rules:
 - Keep scores measured and internally consistent: strong praise with minor caveats should score higher than a mixed verdict, while serious flaws or poor value should materially lower the relevant score. Do not use a perfect 10 unless the source evidence is exceptionally strong.
 - Editorial scores are allowed estimates. They must never be described as a benchmark, measurement, source-issued rating or result of BYTERMINAL hands-on testing.
 """
-        if affiliate_candidates:
-            review_rules += """
-- Experimental affiliate matching: return affiliateProducts with exactly one decision per affiliateCandidates id.
-- Set related=true only when the candidate is the exact product reviewed (including a clear color/storage variant of that same model). Competitors, predecessors, accessories, bundles, generic deals, and uncertain matches are false.
-- These candidates are commerce metadata only. Never insert their names, links, prices, or affiliate copy into article blocks or SEO fields merely because they are supplied here.
-"""
     elif CONTENT_TYPE_LOCK:
         review_rules = f'\n- contentType must be "{CONTENT_TYPE_LOCK}".\n'
+
+    if affiliate_candidates:
+        subject = "product reviewed" if CONTENT_TYPE_LOCK == "review" else "primary product covered by the article"
+        review_rules += f"""
+Affiliate product matching:
+- Return affiliateProducts with exactly one decision per affiliateCandidates id.
+- Set related=true only when the candidate is the exact {subject}, including an unambiguous color or storage variant of the same model.
+- Set related=false for competitors, predecessors, accessories, bundles, generic deals, unrelated products, or uncertain identity. For a roundup without one primary product, set every candidate to false.
+- These candidates are commerce metadata only. Never insert their names, links, prices, or affiliate copy into article blocks or SEO fields merely because they are supplied here.
+"""
 
     source_payload = json.dumps(source_payload, ensure_ascii=False)
     source_rule = _source_specific_instruction(source_url)
