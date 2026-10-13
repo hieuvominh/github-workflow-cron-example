@@ -40,7 +40,7 @@ jobs:
           restore-keys: facebook-share-reviews-
       - name: Install article extractor
         run: python -m pip install --disable-pip-version-check trafilatura==2.2.0 google-genai pillow
-      - name: Crawl and publish Reviews
+      - name: Crawl Reviews as drafts
         env:
           CATEGORY_SLUG: reviews
           CATEGORY_PROMPT_FILE: .github/prompts/reviews.txt
@@ -52,7 +52,8 @@ jobs:
           PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
-          REVIEW_AFFILIATE_SAMPLE_PERCENT: "50"
+          REVIEW_AFFILIATE_SAMPLE_PERCENT: "100"
+          REVIEW_DRAFT_ALL: "true"
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
           INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
           MEDIA_REPO: ${{ vars.MEDIA_REPO }}

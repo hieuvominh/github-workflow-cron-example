@@ -44,6 +44,11 @@ MANUAL_ARTICLE_URL = os.environ.get("MANUAL_ARTICLE_URL", "").strip()
 REVIEW_SOURCE_TRIAL_MODE = os.environ.get("REVIEW_SOURCE_TRIAL_MODE", "").lower() in {
     "1", "true", "yes"
 }
+REVIEW_DRAFT_ALL = os.environ.get("REVIEW_DRAFT_ALL", "").lower() in {
+    "1", "true", "yes"
+}
+if REVIEW_DRAFT_ALL and CATEGORY_SLUG != "reviews":
+    raise ValueError("REVIEW_DRAFT_ALL is only available for reviews")
 REVIEW_SOURCE_TRIAL_SOURCE = os.environ.get("REVIEW_SOURCE_TRIAL_SOURCE", "all").strip().lower()
 REVIEW_AFFILIATE_SAMPLE_PERCENT = int(
     os.environ.get("REVIEW_AFFILIATE_SAMPLE_PERCENT", "0")
@@ -1858,7 +1863,7 @@ if MANUAL_ARTICLE_URL:
     print(f"Review draft mode: {manual_url}")
     articles = [("", manual_url, None)]
 else:
-    if not REVIEW_SOURCE_TRIAL_MODE:
+    if not REVIEW_SOURCE_TRIAL_MODE and not REVIEW_DRAFT_ALL:
         flush_pending_shares()
     articles = collect_articles()
 if not articles:
@@ -2029,7 +2034,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         "categorySlug": CATEGORY_SLUG,
         **editorial_metadata,
         **review_publication_fields(
-            MANUAL_ARTICLE_URL or REVIEW_SOURCE_TRIAL_MODE, affiliate_products
+            MANUAL_ARTICLE_URL or REVIEW_SOURCE_TRIAL_MODE or REVIEW_DRAFT_ALL,
+            affiliate_products,
         ),
     }
     if hero_image:

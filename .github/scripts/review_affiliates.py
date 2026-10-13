@@ -29,9 +29,9 @@ def in_review_affiliate_sample(source_url, percent):
     return bucket < percent
 
 
-def review_publication_fields(manual_mode, affiliate_products):
-    """Only matched affiliate reviews (or manual runs) are sent as drafts."""
-    draft = bool(manual_mode or affiliate_products)
+def review_publication_fields(force_draft, affiliate_products):
+    """Draft matched affiliate reviews or every review in a draft-only run."""
+    draft = bool(force_draft or affiliate_products)
     fields = {"publish": not draft}
     if draft:
         fields["affiliateProducts"] = affiliate_products
