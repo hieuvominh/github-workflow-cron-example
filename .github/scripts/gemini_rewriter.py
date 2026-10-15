@@ -130,6 +130,18 @@ RESPONSE_SCHEMA = {
             "items": {"type": "string"},
             "maxItems": 10,
         },
+        "internalLinks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "targetId": {"type": "integer"},
+                    "anchor": {"type": "string"},
+                },
+                "required": ["targetId", "anchor"],
+            },
+            "maxItems": 3,
+        },
         "contentType": {
             "type": "string",
             "enum": ["review", "news", "guide", "opinion"],
@@ -550,6 +562,7 @@ def _build_prompt(
     source_images,
     raw_content,
     affiliate_candidates=None,
+    internal_link_candidates=None,
 ):
     source_payload = {
         "extractionMode": extraction_mode,
@@ -565,6 +578,11 @@ def _build_prompt(
         source_payload["content"] = raw_content
     if affiliate_candidates:
         source_payload["affiliateCandidates"] = affiliate_candidates
+    if internal_link_candidates:
+        source_payload["internalLinkCandidates"] = [
+            {"id": item["id"], "title": item["title"], "keywords": item["keywords"][:5]}
+            for item in internal_link_candidates
+        ]
 
     review_rules = ""
     if CONTENT_TYPE_LOCK == "review":
@@ -598,6 +616,15 @@ Affiliate product matching:
 - Set related=true only when the candidate is the exact {subject}, including an unambiguous color or storage variant of the same model.
 - Set related=false for competitors, predecessors, accessories, bundles, generic deals, unrelated products, or uncertain identity. For a roundup without one primary product, set every candidate to false.
 - These candidates are commerce metadata only. Never insert their names, links, prices, or affiliate copy into article blocks or SEO fields merely because they are supplied here.
+"""
+
+    if internal_link_candidates:
+        review_rules += """
+Internal link trial:
+- Return internalLinks with at most 3 relevant links, or [] if none genuinely fits.
+- Each targetId must be an id from internalLinkCandidates and each anchor must be an exact, contiguous phrase already present in one retained paragraph block of your final output.
+- Do not rewrite copy just to force an anchor, do not link headings, do not repeat a target, and do not add URLs to article text.
+- Prefer specific products or topics over generic words. Links are editorial metadata, not factual claims.
 """
 
     source_payload = json.dumps(source_payload, ensure_ascii=False)
@@ -990,7 +1017,8 @@ def _matched_affiliate_decisions(candidates, result):
 
 
 def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
-                    affiliate_candidates=None, affiliate_decisions_out=None):
+                    affiliate_candidates=None, affiliate_decisions_out=None,
+                    internal_link_candidates=None):
     api_keys = load_api_keys()
     category_prompt = load_category_prompt(category_slug)
     blocks = sanitize_source_blocks(blocks, source_url)
@@ -1021,6 +1049,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
         source_images,
         raw_content,
         affiliate_candidates,
+        internal_link_candidates,
     )
     result = _request_with_rotation(prompt, api_keys)
 
@@ -1286,6 +1315,31 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
             ][:10],
         },
     }
+    if internal_link_candidates:
+        candidate_by_id = {item["id"]: item for item in internal_link_candidates}
+        paragraphs = [block["text"] for block in rewritten_blocks if block["type"] == "paragraph"]
+        seen_targets = set()
+        seen_anchors = set()
+        internal_links = []
+        for proposed in result.get("internalLinks") or []:
+            if not isinstance(proposed, dict):
+                continue
+            target_id = proposed.get("targetId")
+            anchor = str(proposed.get("anchor", "")).strip()
+            candidate = candidate_by_id.get(target_id)
+            if (
+                not candidate or target_id in seen_targets or anchor.casefold() in seen_anchors or
+                not 3 <= len(anchor) <= 120 or
+                not any(anchor.casefold() in paragraph.casefold() for paragraph in paragraphs)
+            ):
+                continue
+            seen_targets.add(target_id)
+            seen_anchors.add(anchor.casefold())
+            internal_links.append({"anchor": anchor, "targetPath": candidate["path"]})
+            if len(internal_links) == 3:
+                break
+        metadata["internalLinks"] = internal_links
+        print(f"    Internal link trial: {len(internal_links)} validated link(s)")
     if DYNAMIC_PRIMARY_CATEGORY:
         if result.get("eligibleForPublication") is not True:
             reason = str(result.get("rejectionReason", "outside BYTERMINAL taxonomy")).strip()

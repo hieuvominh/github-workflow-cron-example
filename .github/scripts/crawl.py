@@ -21,6 +21,7 @@ from lxml import html as lxml_html
 from PIL import Image
 
 from gemini_rewriter import rewrite_article
+from internal_links import load_computing_snapshot, rank_candidates
 from facebook_publisher import enqueue_published_article, flush_pending_shares
 from manual_review import source_article_title, validate_manual_review_url
 from review_affiliates import (
@@ -45,6 +46,10 @@ REVIEW_SOURCE_TRIAL_MODE = os.environ.get("REVIEW_SOURCE_TRIAL_MODE", "").lower(
     "1", "true", "yes"
 }
 REVIEW_SOURCE_TRIAL_SOURCE = os.environ.get("REVIEW_SOURCE_TRIAL_SOURCE", "all").strip().lower()
+INTERNAL_LINK_TRIAL = os.environ.get("INTERNAL_LINK_TRIAL", "").lower() in {"1", "true", "yes"}
+DRAFT_ONLY = os.environ.get("DRAFT_ONLY", "").lower() in {"1", "true", "yes"}
+if INTERNAL_LINK_TRIAL and (CATEGORY_SLUG != "computing" or not DRAFT_ONLY):
+    raise ValueError("Internal link trial requires Computing and DRAFT_ONLY=true")
 AFFILIATE_SAMPLE_PERCENT = int(
     os.environ.get(
         "AFFILIATE_SAMPLE_PERCENT",
@@ -1873,14 +1878,37 @@ if not articles:
     print(f"No RSS/Atom articles found{scope}")
     raise SystemExit(0)
 
-existing_urls = (
-    {url for _, url, _ in articles if article_exists(url, require_preflight=True)}
-    if MANUAL_ARTICLE_URL
-    else existing_article_urls([url for _, url, _ in articles])
-)
+def crawler_identity(url):
+    return (
+        "internal-link-trial:" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:40]
+        if INTERNAL_LINK_TRIAL else url
+    )
+
+
+if MANUAL_ARTICLE_URL:
+    existing_urls = {
+        url for _, url, _ in articles if article_exists(url, require_preflight=True)
+    }
+else:
+    existing_identities = existing_article_urls(
+        [crawler_identity(url) for _, url, _ in articles]
+    )
+    existing_urls = {
+        url for _, url, _ in articles if crawler_identity(url) in existing_identities
+    }
 manual_draft_created = False
+trial_drafts_created = 0
+link_snapshot = None
+if INTERNAL_LINK_TRIAL and any(url not in existing_urls for _, url, _ in articles):
+    link_snapshot = load_computing_snapshot(
+        os.environ.get("INTERNAL_LINK_SNAPSHOT_FILE", ".internal-links-computing.json"),
+        BYTEKORA_URL,
+        INGEST_SECRET,
+    )
 
 for number, (title, url, published_at) in enumerate(articles, 1):
+    if INTERNAL_LINK_TRIAL and trial_drafts_created >= 1:
+        break
     if url in existing_urls:
         print(f"{number:02}. Skipped duplicate: {url}")
         continue
@@ -1956,6 +1984,10 @@ for number, (title, url, published_at) in enumerate(articles, 1):
 
     try:
         affiliate_decisions = []
+        internal_link_candidates = (
+            rank_candidates(link_snapshot or [], title, clean_text, url)
+            if INTERNAL_LINK_TRIAL else []
+        )
         title, excerpt, blocks, editorial_metadata = rewrite_article(
             title,
             url,
@@ -1964,6 +1996,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             published_at,
             affiliate_candidates=affiliate_candidates,
             affiliate_decisions_out=affiliate_decisions,
+            internal_link_candidates=internal_link_candidates,
         )
     except Exception as error:
         print(f"{number:02}. Skipped: Gemini rewrite failed for {url}: {error}")
@@ -2031,9 +2064,10 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         "excerpt": excerpt,
         "blocks": uploaded_blocks[:500],
         "categorySlug": CATEGORY_SLUG,
+        **({"internalLinkTrial": True} if INTERNAL_LINK_TRIAL else {}),
         **editorial_metadata,
         **review_publication_fields(
-            MANUAL_ARTICLE_URL or REVIEW_SOURCE_TRIAL_MODE,
+            MANUAL_ARTICLE_URL or REVIEW_SOURCE_TRIAL_MODE or DRAFT_ONLY,
             affiliate_products,
         ),
     }
@@ -2081,6 +2115,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             raise RuntimeError(f"Article was not confirmed as draft by CMS: {result}")
         if MANUAL_ARTICLE_URL:
             manual_draft_created = True
+        if INTERNAL_LINK_TRIAL:
+            trial_drafts_created += 1
     time.sleep(1)
 
 if MANUAL_ARTICLE_URL and not manual_draft_created:
