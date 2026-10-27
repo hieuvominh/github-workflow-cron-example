@@ -47,9 +47,14 @@ REVIEW_SOURCE_TRIAL_MODE = os.environ.get("REVIEW_SOURCE_TRIAL_MODE", "").lower(
 }
 REVIEW_SOURCE_TRIAL_SOURCE = os.environ.get("REVIEW_SOURCE_TRIAL_SOURCE", "all").strip().lower()
 INTERNAL_LINK_TRIAL = os.environ.get("INTERNAL_LINK_TRIAL", "").lower() in {"1", "true", "yes"}
+INTERNAL_LINKS_ENABLED = INTERNAL_LINK_TRIAL or os.environ.get(
+    "INTERNAL_LINKS_ENABLED", ""
+).lower() in {"1", "true", "yes"}
 DRAFT_ONLY = os.environ.get("DRAFT_ONLY", "").lower() in {"1", "true", "yes"}
 if INTERNAL_LINK_TRIAL and (CATEGORY_SLUG != "computing" or not DRAFT_ONLY):
     raise ValueError("Internal link trial requires Computing and DRAFT_ONLY=true")
+if INTERNAL_LINKS_ENABLED and CATEGORY_SLUG != "computing":
+    raise ValueError("Internal links are only available for Computing")
 AFFILIATE_SAMPLE_PERCENT = int(
     os.environ.get(
         "AFFILIATE_SAMPLE_PERCENT",
@@ -1899,7 +1904,7 @@ else:
 manual_draft_created = False
 trial_drafts_created = 0
 link_snapshot = None
-if INTERNAL_LINK_TRIAL and any(url not in existing_urls for _, url, _ in articles):
+if INTERNAL_LINKS_ENABLED and any(url not in existing_urls for _, url, _ in articles):
     link_snapshot = load_computing_snapshot(
         os.environ.get("INTERNAL_LINK_SNAPSHOT_FILE", ".internal-links-computing.json"),
         BYTEKORA_URL,
@@ -1986,7 +1991,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         affiliate_decisions = []
         internal_link_candidates = (
             rank_candidates(link_snapshot or [], title, clean_text, url)
-            if INTERNAL_LINK_TRIAL else []
+            if INTERNAL_LINKS_ENABLED else []
         )
         title, excerpt, blocks, editorial_metadata = rewrite_article(
             title,
@@ -2109,6 +2114,8 @@ for number, (title, url, published_at) in enumerate(articles, 1):
         f"    CMS: {result}"
     )
     if article["publish"]:
+        if result.get("ok") is not True or result.get("status") != "published":
+            raise RuntimeError(f"Article was not confirmed as published by CMS: {result}")
         enqueue_published_article(result, article)
     else:
         if result.get("ok") is not True or result.get("status") != "draft":

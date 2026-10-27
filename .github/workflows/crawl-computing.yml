@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+      - name: Restore Computing link snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: .internal-links-computing.json
+          key: internal-links-computing-${{ github.run_id }}
+          restore-keys: internal-links-computing-
       - name: Restore Gemini key rotation
         uses: actions/cache/restore@v4
         with:
@@ -48,6 +54,8 @@ jobs:
           PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
+          INTERNAL_LINKS_ENABLED: "true"
+          INTERNAL_LINK_SNAPSHOT_FILE: .internal-links-computing.json
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
           INGEST_SECRET: ${{ secrets.BYTEKORA_INGEST_SECRET }}
           MEDIA_REPO: ${{ vars.MEDIA_REPO }}
@@ -62,6 +70,12 @@ jobs:
           GEMINI_KEY_INDEX_FILE: .gemini-key-index
           GEMINI_MODEL_PREFERENCE_FILE: .gemini-model-preferences.json
         run: python .github/scripts/crawl.py
+      - name: Save Computing link snapshot
+        if: always() && hashFiles('.internal-links-computing.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .internal-links-computing.json
+          key: internal-links-computing-${{ github.run_id }}
       - name: Save Facebook share state
         if: always() && hashFiles('.facebook-share-state.json') != ''
         uses: actions/cache/save@v4

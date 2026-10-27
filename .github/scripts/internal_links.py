@@ -1,4 +1,4 @@
-"""Small, reusable candidate snapshot for the opt-in Computing draft trial."""
+"""Small, reusable Computing article candidates for internal links."""
 
 import json
 import os

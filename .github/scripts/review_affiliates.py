@@ -1,4 +1,4 @@
-"""Product discovery for review and gadget affiliate drafts."""
+"""Product discovery for review and gadget articles."""
 
 import hashlib
 import re
@@ -33,10 +33,10 @@ def in_review_affiliate_sample(source_url, percent):
 
 
 def review_publication_fields(force_draft, affiliate_products):
-    """Draft matched affiliate articles or everything in a draft-only run."""
-    draft = bool(force_draft or affiliate_products)
+    """Manual/trial runs stay drafts; scheduled runs may publish matched products."""
+    draft = bool(force_draft)
     fields = {"publish": not draft}
-    if draft:
+    if draft or affiliate_products:
         fields["affiliateProducts"] = affiliate_products
     return fields
 

@@ -21,7 +21,7 @@ class ReviewAffiliatesTests(unittest.TestCase):
         self.assertFalse(in_review_affiliate_sample(self.SOURCE, 0))
         self.assertTrue(in_review_affiliate_sample(self.SOURCE, 100))
 
-    def test_only_matched_affiliate_reviews_become_automatic_drafts(self):
+    def test_scheduled_affiliate_articles_publish_with_products(self):
         product = {"asin": "B0H8N49DSC", "affiliateUrl": amazon_affiliate_url("B0H8N49DSC")}
         self.assertEqual(review_publication_fields(False, []), {"publish": True})
         unrelated = affiliate_product_payload([
@@ -29,7 +29,7 @@ class ReviewAffiliatesTests(unittest.TestCase):
         ])
         self.assertEqual(review_publication_fields(False, unrelated), {"publish": True})
         self.assertEqual(review_publication_fields(False, [product]), {
-            "publish": False, "affiliateProducts": [product],
+            "publish": True, "affiliateProducts": [product],
         })
         self.assertEqual(review_publication_fields(True, []), {
             "publish": False, "affiliateProducts": [],
