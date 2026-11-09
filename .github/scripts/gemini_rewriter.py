@@ -1,3 +1,4 @@
+from difflib import SequenceMatcher
 import json
 import os
 import re
@@ -690,7 +691,7 @@ Review score policy:
 - Block a score only when it clearly contradicts the source's overall verdict, a component has no relevant qualitative evidence at all, or the copy falsely says the source assigned that number or BYTERMINAL measured it hands-on.
 - A score disagreement within a reasonable editorial range is a warning at most, never a blocker.
 
-Everything else belongs in warnings and must not block: tag or taxonomy preferences, thin or generic headings, flat phrasing, an ordering you would have chosen differently, omitted promotional detail, or wording that stays close to the source without lifting a substantial distinctive passage. Tags are editorial classification and do not need to appear as exact words in the source. Never report a Writer block as a duplicate of a Source block. Report duplication only when the same passage repeats inside the Writer JSON itself. Similarity or near-verbatim concerns belong in warnings; reserve unsupportedClaims for factual fabrication.
+A substantial distinctive passage copied or closely paraphrased from the source is a blocking remainingBoilerplate finding. Ordinary factual alignment between corresponding blocks is expected and is not a defect. Put minor wording similarities in warnings. Tag or taxonomy preferences, thin or generic headings, flat phrasing, ordering preferences and omitted promotional detail belong in warnings. Tags do not need to appear as exact words in the source. Repeated passages inside the Writer JSON are also blocking remainingBoilerplate findings. Reserve unsupportedClaims for factual fabrication.
 
 The recommended editorial ranges are:
 - seoTitle: {SEO_TITLE_MIN}-{SEO_TITLE_MAX} characters.
@@ -746,11 +747,6 @@ def _writer_contract_issues(result):
     return issues
 
 
-BLOCK_COMPARISON_NOISE = re.compile(
-    r"(?:near[\s-]?(?:duplicat|verbatim)|duplicat|identical|similar|paraphras|mirrors|echoes|reproduc)",
-    re.IGNORECASE,
-)
-SOURCE_REFERENCE = re.compile(r"\bsource\b", re.IGNORECASE)
 EDITORIAL_SCORE_REFERENCE = re.compile(
     r"(?:overallScore|componentScores?|editorial (?:summary )?score|numeric(?:al)? score)",
     re.IGNORECASE,
@@ -760,18 +756,6 @@ SCORE_MISATTRIBUTION = re.compile(
     r"BYTERMINAL (?:tested|measured|benchmarked)|hands[\s-]?on)",
     re.IGNORECASE,
 )
-
-
-def _is_block_comparison(finding):
-    """A boilerplate finding must quote surviving source chrome.
-
-    A validator that instead compares a writer block with its source block is
-    describing the block-aligned rewrite it was asked to accept, so the finding
-    is demoted to a warning rather than blocking publication.
-    """
-    return bool(
-        BLOCK_COMPARISON_NOISE.search(finding) and SOURCE_REFERENCE.search(finding)
-    )
 
 
 def _is_editorial_score_finding(finding):
@@ -790,7 +774,7 @@ def _blocking_findings(validation, demoted=None):
             text = str(item).strip()
             if not text:
                 continue
-            if _is_block_comparison(text) or _is_editorial_score_finding(text):
+            if _is_editorial_score_finding(text):
                 if demoted is not None:
                     demoted.append(text)
                 continue
@@ -802,6 +786,20 @@ def _blocking_findings(validation, demoted=None):
 
 def _validation_failed(validation):
     return bool(_blocking_findings(validation))
+
+
+def _has_substantial_source_overlap(rewritten_text, source_text):
+    """Reject long identical word runs in an aligned source/rewritten paragraph."""
+    def words(text):
+        return re.findall(r"[^\W_]+(?:['’][^\W_]+)?", text.casefold())
+
+    rewritten_words = words(rewritten_text)
+    source_words = words(source_text)
+    if len(rewritten_words) < 15 or len(source_words) < 15:
+        return False
+    match = SequenceMatcher(None, rewritten_words, source_words, autojunk=False).find_longest_match()
+    copied_words = rewritten_words[match.a : match.a + match.size]
+    return match.size >= 15 and len(" ".join(copied_words)) >= 80
 
 
 def _load_key_index(total_keys):
@@ -1128,7 +1126,7 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
             raise RuntimeError(f"Gemini returned unknown block id {block_id}")
         if block_id in rewritten_by_id:
             raise RuntimeError(f"Gemini duplicated block id {block_id}")
-        drop = CONTENT_TYPE_LOCK == "review" and item.get("drop") is True
+        drop = item.get("drop") is True
         if drop:
             rewritten_by_id[block_id] = {
                 "text": "",
@@ -1139,8 +1137,12 @@ def rewrite_article(title, source_url, blocks, category_slug, published_at=None,
             }
             continue
         if not text:
-            text = source_by_id.get(block_id, {}).get("text", "").strip()
-            print(f"    Gemini returned empty block {block_id}; preserving source text")
+            raise RuntimeError(f"Gemini returned empty retained block {block_id}")
+        source_block = source_by_id.get(block_id, {})
+        if source_block.get("type") == "paragraph" and _has_substantial_source_overlap(
+            text, source_block.get("text", "")
+        ):
+            raise RuntimeError(f"Gemini copied a substantial source passage in block {block_id}")
         if block_type not in ("paragraph", "heading"):
             block_type = source_by_id.get(block_id, {}).get("type", "paragraph")
             print(f"    Gemini returned invalid type for block {block_id}; using {block_type}")

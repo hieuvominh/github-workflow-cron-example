@@ -8,6 +8,7 @@ import pathlib
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent
@@ -26,6 +27,71 @@ spec = importlib.util.spec_from_file_location(
 )
 rewriter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rewriter)
+
+
+class GeminiSourceOverlapTests(unittest.TestCase):
+    def test_rejects_long_copied_passage(self):
+        source = "The new device was tested across several demanding workloads and showed measurable gains in sustained performance while battery life remained stable throughout the entire evaluation period."
+        self.assertTrue(rewriter._has_substantial_source_overlap(source, source))
+
+    def test_accepts_independently_written_summary(self):
+        source = "The new device was tested across several demanding workloads and showed measurable gains in sustained performance while battery life remained stable throughout the entire evaluation period."
+        rewritten = "Testing found faster sustained performance without a battery-life penalty. The report does not provide enough data to predict results in every workload."
+        self.assertFalse(rewriter._has_substantial_source_overlap(rewritten, source))
+
+    def test_short_shared_phrase_is_not_a_blocker(self):
+        source = "The new device was tested across several demanding workloads and showed measurable gains in sustained performance while battery life remained stable throughout the entire evaluation period."
+        rewritten = "The new device was tested across several demanding workloads. Its battery behavior needs more testing before drawing a broader conclusion."
+        self.assertFalse(rewriter._has_substantial_source_overlap(rewritten, source))
+
+    def test_validator_no_longer_demotes_source_copy(self):
+        finding = "Writer copied a near-verbatim passage from the source"
+        self.assertEqual(rewriter._blocking_findings({"remainingBoilerplate": [finding]}), {"remainingBoilerplate": [finding]})
+
+
+class GeminiRewriteSafetyTests(unittest.TestCase):
+    def rewrite(self, writer_blocks):
+        source_blocks = [
+            {"type": "heading", "level": "h2", "text": "Background"},
+            {"type": "paragraph", "text": "The source describes a new chip for laptop computers and explains that its battery performance held steady during demanding tests across several hours of continuous use."},
+            {"type": "paragraph", "text": "The report also includes a comparison with last year's laptop and describes faster work in a wide range of applications without giving a precise percentage."},
+        ]
+        writer = {
+            "title": "Laptop chip report", "seoTitle": "Laptop chip report",
+            "excerpt": "An independent summary of a laptop chip report.",
+            "seoDescription": "An independent summary of a laptop chip report.",
+            "seoKeywords": ["laptop chip", "battery performance", "computer processor"],
+            "contentType": "news", "secondaryCategories": [], "tags": [],
+            "featured": False, "trending": False, "readingTime": 2,
+            "blocks": writer_blocks, "images": [],
+        }
+        validation = {"remainingBoilerplate": [], "unsupportedClaims": [], "warnings": []}
+        with patch.object(rewriter, "CONTENT_TYPE_LOCK", "news"), \
+             patch.object(rewriter, "load_api_keys", return_value=["fake"]), \
+             patch.object(rewriter, "load_category_prompt", return_value=""), \
+             patch.object(rewriter, "sanitize_source_blocks", side_effect=lambda blocks, url: blocks), \
+             patch.object(rewriter, "_structured_input_is_reliable", return_value=True), \
+             patch.object(rewriter, "_request_with_rotation", side_effect=[writer, validation]):
+            return rewriter.rewrite_article(
+                "Laptop chip report", "https://example.com/source", source_blocks, "news"
+            )
+
+    def test_non_review_drop_is_honored(self):
+        _, _, blocks, _ = self.rewrite([
+            {"id": 0, "type": "heading", "level": "h2", "text": "Background", "drop": False},
+            {"id": 1, "type": "paragraph", "level": "none", "text": "", "drop": True},
+            {"id": 2, "type": "paragraph", "level": "none", "text": "Independent analysis notes the reported battery result has limits.", "drop": False},
+        ])
+        self.assertEqual(len(blocks), 2)
+        self.assertNotIn("The source describes", " ".join(block["text"] for block in blocks))
+
+    def test_empty_retained_block_rejects_article(self):
+        with self.assertRaisesRegex(RuntimeError, "empty retained block"):
+            self.rewrite([
+                {"id": 0, "type": "heading", "level": "h2", "text": "Background", "drop": False},
+                {"id": 1, "type": "paragraph", "level": "none", "text": "", "drop": False},
+                {"id": 2, "type": "paragraph", "level": "none", "text": "Independent analysis notes the reported battery result has limits.", "drop": False},
+            ])
 
 
 class GeminiSEOKeywordContractTests(unittest.TestCase):
