@@ -88,6 +88,7 @@ PUBLISHED_WITHIN_HOURS = max(
 )
 FEED_MAX_PAGES = max(1, int(os.environ.get("FEED_MAX_PAGES", "1")))
 MAX_ARTICLES = max(0, int(os.environ.get("MAX_ARTICLES", "10")))
+MAX_NEW_POSTS_PER_RUN = max(0, int(os.environ.get("MAX_NEW_POSTS_PER_RUN", "0")))
 RAW_SOURCE_VERTICAL_RULES = os.environ.get("SOURCE_VERTICAL_RULES", "").strip()
 IMAGE_MAX_WIDTH = max(320, int(os.environ.get("IMAGE_MAX_WIDTH", "1600")))
 IMAGE_MAX_HEIGHT = max(320, int(os.environ.get("IMAGE_MAX_HEIGHT", "1600")))
@@ -1903,6 +1904,7 @@ else:
     }
 manual_draft_created = False
 trial_drafts_created = 0
+new_posts_created = 0
 link_snapshot = None
 if INTERNAL_LINKS_ENABLED and any(url not in existing_urls for _, url, _ in articles):
     link_snapshot = load_computing_snapshot(
@@ -1912,6 +1914,9 @@ if INTERNAL_LINKS_ENABLED and any(url not in existing_urls for _, url, _ in arti
     )
 
 for number, (title, url, published_at) in enumerate(articles, 1):
+    if MAX_NEW_POSTS_PER_RUN and new_posts_created >= MAX_NEW_POSTS_PER_RUN:
+        print(f"Reached the {MAX_NEW_POSTS_PER_RUN} new-post limit for this run")
+        break
     if INTERNAL_LINK_TRIAL and trial_drafts_created >= 1:
         break
     if url in existing_urls:
@@ -2124,6 +2129,7 @@ for number, (title, url, published_at) in enumerate(articles, 1):
             manual_draft_created = True
         if INTERNAL_LINK_TRIAL:
             trial_drafts_created += 1
+    new_posts_created += 1
     time.sleep(1)
 
 if MANUAL_ARTICLE_URL and not manual_draft_created:

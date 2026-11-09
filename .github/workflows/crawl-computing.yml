@@ -54,6 +54,7 @@ jobs:
           PUBLISHED_WITHIN_HOURS: "36"
           FEED_MAX_PAGES: "10"
           MAX_ARTICLES: "0"
+          MAX_NEW_POSTS_PER_RUN: "2"
           INTERNAL_LINKS_ENABLED: "true"
           INTERNAL_LINK_SNAPSHOT_FILE: .internal-links-computing.json
           BYTEKORA_URL: ${{ secrets.BYTEKORA_URL }}
